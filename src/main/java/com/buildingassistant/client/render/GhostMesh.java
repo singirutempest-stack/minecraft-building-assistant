@@ -66,15 +66,19 @@ final class GhostMesh {
     private VertexBuffer[] layers = new VertexBuffer[0];
     private byte[] builtKinds = new byte[0];
     private boolean outline;
+    private boolean blockEntityGhosts;
 
     /**
      * Brings the geometry up to date and rebuilds only the layers whose content changed.
      *
      * @param validation what is known about the world, or null to draw every block as a ghost
+     * @param blockEntityGhosts true when beds, chests and similar blocks are drawn separately by
+     *                          {@link GhostBlockEntities} and must be left out here
      * @param rebuildAll true when the build's shape or the style changed and nothing can be reused
      */
     void sync(SchematicProjection projection, @Nullable ValidationState validation, boolean outline,
-              ClientLevel level, boolean rebuildAll) {
+              boolean blockEntityGhosts, ClientLevel level, boolean rebuildAll) {
+        this.blockEntityGhosts = blockEntityGhosts;
         int layerCount = projection.layerCount();
         byte[] kinds = kindsOf(projection, validation);
         if (rebuildAll || layers.length != layerCount || builtKinds.length != kinds.length || this.outline != outline) {
@@ -169,7 +173,7 @@ final class GhostMesh {
                     if (outline) {
                         addOutline(state, view, relative, poseStack);
                     } else {
-                        addBlock(state, view, relative, poseStack, dispatcher, random, minecraft);
+                        addBlock(state, view, relative, poseStack, dispatcher, random, minecraft, blockEntityGhosts);
                     }
                 } catch (RuntimeException e) {
                     // A broken model from another mod must not take the whole build down with it.
@@ -193,7 +197,8 @@ final class GhostMesh {
     }
 
     private static void addBlock(BlockState state, GhostBlockView view, BlockPos relative, PoseStack poseStack,
-                                 BlockRenderDispatcher dispatcher, RandomSource random, Minecraft minecraft) {
+                                 BlockRenderDispatcher dispatcher, RandomSource random, Minecraft minecraft,
+                                 boolean blockEntityGhosts) {
         if (state.getBlock() instanceof LiquidBlock) {
             FluidState fluid = state.getFluidState();
             IClientFluidTypeExtensions extensions = IClientFluidTypeExtensions.of(fluid);
@@ -214,8 +219,12 @@ final class GhostMesh {
         }
 
         // Chests, beds, signs and similar blocks are drawn by block entity renderers and have no block
-        // model. Show their outline shape, textured with the block's particle texture, so the player
-        // still sees where the block goes and how large it is.
+        // model. Normally GhostBlockEntities draws their real model.
+        if (blockEntityGhosts && GhostBlockEntities.handles(state)) {
+            return;
+        }
+        // Fallback when that is not possible: the outline shape, textured with the block's particle
+        // texture, so the player still sees where the block goes and how large it is.
         TextureAtlasSprite sprite = model.getParticleIcon(ModelData.EMPTY);
         VoxelShape shape = state.getShape(view, relative);
         if (shape.isEmpty()) {
@@ -340,6 +349,11 @@ final class GhostMesh {
 
     int layerCount() {
         return layers.length;
+    }
+
+    /** Per entry, how it was treated in the last sync: one of the {@code KIND_*} values. */
+    byte[] kinds() {
+        return builtKinds;
     }
 
     /** Frees the GPU buffers. The mesh can be rebuilt afterwards. */

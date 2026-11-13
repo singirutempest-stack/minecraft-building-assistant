@@ -120,6 +120,7 @@ public final class GhostRenderer {
         float red = ((rgb >> 16) & 0xFF) / 255.0F;
         float green = ((rgb >> 8) & 0xFF) / 255.0F;
         float blue = (rgb & 0xFF) / 255.0F;
+        boolean blockEntityGhosts = !outline && GhostBlockEntities.isAvailable();
         boolean highlightErrors = ClientConfig.HIGHLIGHT_WRONG_BLOCKS.get();
         int wrongColor = ClientConfig.color(ClientConfig.WRONG_COLOR);
         int clearanceColor = ClientConfig.color(ClientConfig.CLEARANCE_COLOR);
@@ -145,15 +146,25 @@ public final class GhostRenderer {
 
             CachedMesh cached = MESHES.computeIfAbsent(project.id(), id -> new CachedMesh());
             boolean rebuildAll = cached.shapeVersion != project.shapeVersion() || cached.outline != outline
-                    || !cached.built;
+                    || cached.blockEntityGhosts != blockEntityGhosts
+                    || cached.supportGeneration != GhostBlockEntities.supportGeneration() || !cached.built;
             int validationVersion = validation == null ? -1 : validation.version();
-            if (rebuildAll || cached.validation != validation || cached.validationVersion != validationVersion) {
-                cached.mesh.sync(projection, validation, outline, level, rebuildAll);
+            if (rebuildAll || cached.validation != validation || cached.validationVersion != validationVersion
+                    || cached.projection != projection) {
+                cached.mesh.sync(projection, validation, outline, blockEntityGhosts, level, rebuildAll);
+                if (blockEntityGhosts) {
+                    cached.blockEntities.sync(projection, cached.mesh.kinds(), level);
+                } else {
+                    cached.blockEntities.clear();
+                }
                 cached.shapeVersion = project.shapeVersion();
                 cached.outline = outline;
+                cached.blockEntityGhosts = blockEntityGhosts;
+                cached.supportGeneration = GhostBlockEntities.supportGeneration();
                 cached.built = true;
                 cached.validation = validation;
                 cached.validationVersion = validationVersion;
+                cached.projection = projection;
             }
             if (highlightErrors) {
                 cached.highlights.sync(validation, wrongColor, clearanceColor);
@@ -164,8 +175,10 @@ public final class GhostRenderer {
             poseStack.translate(anchor.getX() - camera.x, anchor.getY() - camera.y, anchor.getZ() - camera.z);
             try {
                 Matrix4f modelView = poseStack.last().pose();
-                cached.mesh.draw(modelView, projectionMatrix,
-                        0, cached.mesh.layerCount() - 1, red, green, blue, alpha, afterLevel);
+                int lastLayer = cached.mesh.layerCount() - 1;
+                cached.mesh.draw(modelView, projectionMatrix, 0, lastLayer, red, green, blue, alpha, afterLevel);
+                cached.blockEntities.draw(poseStack, minecraft.getFrameTime(), 0, lastLayer,
+                        red, green, blue, alpha, afterLevel);
                 if (highlightErrors) {
                     cached.highlights.draw(modelView, projectionMatrix, afterLevel);
                 }
@@ -250,16 +263,22 @@ public final class GhostRenderer {
     private static final class CachedMesh {
         final GhostMesh mesh = new GhostMesh();
         final HighlightMesh highlights = new HighlightMesh();
+        final GhostBlockEntities blockEntities = new GhostBlockEntities();
         int shapeVersion;
         boolean outline;
+        boolean blockEntityGhosts;
+        int supportGeneration;
         boolean built;
         @Nullable
         ValidationState validation;
         int validationVersion;
+        @Nullable
+        SchematicProjection projection;
 
         void close() {
             mesh.close();
             highlights.close();
+            blockEntities.clear();
         }
     }
 }
