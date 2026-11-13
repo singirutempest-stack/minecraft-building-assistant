@@ -28,6 +28,7 @@
   "buildingassistant.ghost_style.textured": "Textured",
   "buildingassistant.ghost_style.tinted": "Tinted",
   "buildingassistant.ghost_style.outline": "Outline",
+  "buildingassistant.message.render_failed": "Ghost blocks were switched off after a rendering error: %s. Please report this with your latest.log.",
   "buildingassistant.schematic.oak_cabin.name": "Oak Cabin",
   "buildingassistant.schematic.oak_cabin.description": "A snug starter cabin with a bed, furnace, chest and crafting table under a spruce gable roof."
 }

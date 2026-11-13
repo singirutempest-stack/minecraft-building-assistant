@@ -43,7 +43,7 @@ public final class ClientInit {
     }
 
     private static void onLoggingOut(ClientPlayerNetworkEvent.LoggingOut event) {
-        GhostRenderer.closeAll();
+        GhostRenderer.reset();
         ProjectManager.get().clear();
     }
 }

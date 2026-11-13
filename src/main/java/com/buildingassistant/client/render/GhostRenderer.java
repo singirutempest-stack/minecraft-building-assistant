@@ -1,5 +1,6 @@
 package com.buildingassistant.client.render;
 
+import com.buildingassistant.BuildingAssistant;
 import com.buildingassistant.config.ClientConfig;
 import com.buildingassistant.config.GhostStyle;
 import com.buildingassistant.project.BuildProject;
@@ -9,6 +10,7 @@ import com.mojang.blaze3d.vertex.PoseStack;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.BlockPos;
+import net.minecraft.network.chat.Component;
 import net.minecraft.world.level.levelgen.structure.BoundingBox;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
@@ -32,14 +34,32 @@ public final class GhostRenderer {
     private static final double MAX_RENDER_DISTANCE = 192.0;
 
     private static final Map<UUID, CachedMesh> MESHES = new HashMap<>();
+    private static boolean disabledByError;
 
     private GhostRenderer() {
     }
 
     public static void onRenderLevelStage(RenderLevelStageEvent event) {
-        if (event.getStage() != RenderLevelStageEvent.Stage.AFTER_TRANSLUCENT_BLOCKS) {
+        if (event.getStage() != RenderLevelStageEvent.Stage.AFTER_TRANSLUCENT_BLOCKS || disabledByError) {
             return;
         }
+        try {
+            render(event);
+        } catch (RuntimeException e) {
+            // A rendering failure must never crash the game. Switch ghosts off and tell the player;
+            // leaving and re-entering the world tries again.
+            disabledByError = true;
+            BuildingAssistant.LOGGER.error("Ghost block rendering failed and was switched off", e);
+            closeAll();
+            Minecraft minecraft = Minecraft.getInstance();
+            if (minecraft.player != null) {
+                minecraft.player.displayClientMessage(
+                        Component.translatable("buildingassistant.message.render_failed", String.valueOf(e)), false);
+            }
+        }
+    }
+
+    private static void render(RenderLevelStageEvent event) {
         Minecraft minecraft = Minecraft.getInstance();
         ClientLevel level = minecraft.level;
         ProjectManager manager = ProjectManager.get();
@@ -99,12 +119,18 @@ public final class GhostRenderer {
         }
     }
 
-    /** Frees all GPU resources. Called when the player leaves the world. */
+    /** Frees all GPU resources. */
     public static void closeAll() {
         for (CachedMesh cached : MESHES.values()) {
             cached.mesh.close();
         }
         MESHES.clear();
+    }
+
+    /** Called when the player leaves the world: frees resources and clears a previous failure. */
+    public static void reset() {
+        closeAll();
+        disabledByError = false;
     }
 
     private static void dropMeshesOfRemovedProjects(ProjectManager manager) {
