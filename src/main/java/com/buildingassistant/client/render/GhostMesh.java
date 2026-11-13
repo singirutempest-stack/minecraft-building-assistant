@@ -211,10 +211,12 @@ final class GhostMesh {
     /**
      * Draws layers {@code firstLayer} to {@code lastLayer} (inclusive).
      *
-     * @param modelView model-view matrix already translated to the build's anchor
+     * @param modelView  model-view matrix already translated to the build's anchor
+     * @param afterLevel true when drawing on top of the finished level: output goes straight to the main
+     *                   render target and distance fog is switched off for the draw
      */
     void draw(Matrix4f modelView, Matrix4f projection, int firstLayer, int lastLayer,
-              float red, float green, float blue, float alpha) {
+              float red, float green, float blue, float alpha, boolean afterLevel) {
         int first = Math.max(0, firstLayer);
         int last = Math.min(layers.length - 1, lastLayer);
         if (first > last) {
@@ -223,6 +225,13 @@ final class GhostMesh {
 
         RenderType renderType = outline ? RenderType.lines() : RenderType.translucent();
         renderType.setupRenderState();
+        float previousFogStart = RenderSystem.getShaderFogStart();
+        if (afterLevel) {
+            // The render type may have selected an intermediate target (Fabulous graphics); at this
+            // point those have already been merged, so only the main target reaches the screen.
+            Minecraft.getInstance().getMainRenderTarget().bindWrite(false);
+            RenderSystem.setShaderFogStart(Float.MAX_VALUE);
+        }
         RenderSystem.setShaderColor(red, green, blue, alpha);
         ShaderInstance shader = RenderSystem.getShader();
         try {
@@ -241,6 +250,7 @@ final class GhostMesh {
             VertexBuffer.unbind();
             RenderSystem.colorMask(true, true, true, true);
             RenderSystem.setShaderColor(1.0F, 1.0F, 1.0F, 1.0F);
+            RenderSystem.setShaderFogStart(previousFogStart);
             renderType.clearRenderState();
         }
     }

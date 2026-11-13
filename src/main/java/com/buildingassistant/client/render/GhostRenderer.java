@@ -6,16 +6,21 @@ import com.buildingassistant.config.GhostStyle;
 import com.buildingassistant.project.BuildProject;
 import com.buildingassistant.project.ProjectManager;
 import com.buildingassistant.transform.SchematicProjection;
+import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vertex.PoseStack;
+import net.minecraft.client.Camera;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.client.renderer.culling.Frustum;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.level.levelgen.structure.BoundingBox;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 import net.minecraftforge.client.event.RenderLevelStageEvent;
+import org.joml.Matrix4f;
 
+import javax.annotation.Nullable;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.Map;
@@ -24,8 +29,8 @@ import java.util.UUID;
 /**
  * Draws the ghost blocks of every visible project.
  *
- * <p>Uses only standard Forge hooks and vanilla shaders: geometry is cached in vertex buffers and drawn
- * after the translucent terrain pass, with the same render state as translucent blocks. Nothing here
+ * <p>Geometry is cached in vertex buffers and drawn with vanilla shaders after the level has been
+ * rendered, on top of the finished frame but tested against the world's depth buffer. Nothing here
  * depends on a particular renderer mod, and no block is ever placed in the world.
  */
 public final class GhostRenderer {
@@ -35,16 +40,42 @@ public final class GhostRenderer {
 
     private static final Map<UUID, CachedMesh> MESHES = new HashMap<>();
     private static boolean disabledByError;
+    /** Set once the post-level hook has fired; from then on the event fallback stays silent. */
+    private static boolean afterLevelHookSeen;
 
     private GhostRenderer() {
     }
 
+    /**
+     * Preferred entry point, called by {@code GameRendererMixin} once the level is fully drawn. Works the
+     * same with the vanilla renderer, Embeddium and Oculus shader packs.
+     */
+    public static void renderAfterLevel(PoseStack poseStack, Camera camera) {
+        if (!afterLevelHookSeen) {
+            afterLevelHookSeen = true;
+            BuildingAssistant.LOGGER.info("Ghost blocks are drawn after the level (post-level hook active)");
+        }
+        guarded(() -> render(poseStack, RenderSystem.getProjectionMatrix(), camera.getPosition(), null, true));
+    }
+
+    /**
+     * Fallback entry point through Forge's render stage event, used only when the post-level hook is not
+     * available. Ghosts drawn here can turn opaque under a shader pack.
+     */
     public static void onRenderLevelStage(RenderLevelStageEvent event) {
-        if (event.getStage() != RenderLevelStageEvent.Stage.AFTER_TRANSLUCENT_BLOCKS || disabledByError) {
+        if (event.getStage() != RenderLevelStageEvent.Stage.AFTER_TRANSLUCENT_BLOCKS || afterLevelHookSeen) {
+            return;
+        }
+        guarded(() -> render(event.getPoseStack(), event.getProjectionMatrix(), event.getCamera().getPosition(),
+                event.getFrustum(), false));
+    }
+
+    private static void guarded(Runnable renderCall) {
+        if (disabledByError) {
             return;
         }
         try {
-            render(event);
+            renderCall.run();
         } catch (RuntimeException e) {
             // A rendering failure must never crash the game. Switch ghosts off and tell the player;
             // leaving and re-entering the world tries again.
@@ -59,7 +90,12 @@ public final class GhostRenderer {
         }
     }
 
-    private static void render(RenderLevelStageEvent event) {
+    /**
+     * @param frustum    view frustum for culling, or null to skip the check
+     * @param afterLevel true when called after the level renderer has finished
+     */
+    private static void render(PoseStack poseStack, Matrix4f projectionMatrix, Vec3 camera,
+                               @Nullable Frustum frustum, boolean afterLevel) {
         Minecraft minecraft = Minecraft.getInstance();
         ClientLevel level = minecraft.level;
         ProjectManager manager = ProjectManager.get();
@@ -79,9 +115,6 @@ public final class GhostRenderer {
         float green = ((rgb >> 8) & 0xFF) / 255.0F;
         float blue = (rgb & 0xFF) / 255.0F;
 
-        Vec3 camera = event.getCamera().getPosition();
-        PoseStack poseStack = event.getPoseStack();
-
         for (BuildProject project : manager.projects()) {
             if (!project.visible() || project.dimension() != level.dimension()) {
                 continue;
@@ -91,7 +124,7 @@ public final class GhostRenderer {
             AABB box = new AABB(bounds.minX(), bounds.minY(), bounds.minZ(),
                     bounds.maxX() + 1.0, bounds.maxY() + 1.0, bounds.maxZ() + 1.0);
             if (box.distanceToSqr(camera) > MAX_RENDER_DISTANCE * MAX_RENDER_DISTANCE
-                    || !event.getFrustum().isVisible(box)) {
+                    || (frustum != null && !frustum.isVisible(box))) {
                 continue;
             }
 
@@ -106,9 +139,12 @@ public final class GhostRenderer {
             BlockPos anchor = project.placement().anchor();
             poseStack.pushPose();
             poseStack.translate(anchor.getX() - camera.x, anchor.getY() - camera.y, anchor.getZ() - camera.z);
-            cached.mesh.draw(poseStack.last().pose(), event.getProjectionMatrix(),
-                    0, cached.mesh.layerCount() - 1, red, green, blue, alpha);
-            poseStack.popPose();
+            try {
+                cached.mesh.draw(poseStack.last().pose(), projectionMatrix,
+                        0, cached.mesh.layerCount() - 1, red, green, blue, alpha, afterLevel);
+            } finally {
+                poseStack.popPose();
+            }
         }
     }
 
