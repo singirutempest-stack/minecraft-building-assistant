@@ -29,7 +29,7 @@ class Build:
     """A schematic under construction. Later calls overwrite earlier ones at the same position."""
 
     def __init__(self, id, name, description, category, difficulty, size, stages,
-                 name_ru=None, description_ru=None, yaw=215.0, pitch=25.0):
+                 name_ru=None, description_ru=None, yaw=215.0, pitch=25.0, floors=(0,)):
         self.id = id
         self.name = name
         self.description = description
@@ -41,6 +41,7 @@ class Build:
         self.stages = list(stages)  # list of (id, English name)
         self.yaw = yaw
         self.pitch = pitch
+        self.floors = list(floors)  # layers on which a storey begins
         self.cells = {}
         self._stage_index = {stage_id: i for i, (stage_id, _) in enumerate(self.stages)}
 
@@ -78,6 +79,9 @@ class Build:
             if min(used) != 0 or max(used) != self.size[axis] - 1:
                 raise BuildError(f"{self.id}: size on {name} is {self.size[axis]} but blocks span "
                                  f"{min(used)}..{max(used)}")
+        if not self.floors or self.floors != sorted(set(self.floors)) \
+                or self.floors[0] < 0 or self.floors[-1] >= self.size[1]:
+            raise BuildError(f"{self.id}: invalid floors {self.floors}")
         used_stages = {stage for _, stage in self.cells.values() if stage is not None}
         for stage_id, _ in self.stages:
             if stage_id not in used_stages:
@@ -121,6 +125,7 @@ class Build:
             ",\n".join(f"    {dump({'id': stage_id, 'name': name})}" for stage_id, name in self.stages),
             "  ],",
             f'  "preview": {dump({"yaw": self.yaw, "pitch": self.pitch})},',
+            f'  "floors": {dump(self.floors)},',
             '  "blocks": [',
             ",\n".join(rows),
             "  ]",

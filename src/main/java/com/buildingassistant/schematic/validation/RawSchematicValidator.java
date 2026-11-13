@@ -28,6 +28,24 @@ public final class RawSchematicValidator {
         validatePalette(raw.palette(), issues);
         boolean stagesValid = validateStages(raw.stages(), issues);
         validateBlocks(raw, sizeValid, stagesValid, issues);
+        if (sizeValid) {
+            validateFloors(raw, issues);
+        }
+    }
+
+    private static void validateFloors(RawSchematic raw, IssueCollector issues) {
+        int[] floors = raw.floors();
+        if (floors.length == 0) {
+            issues.error("At least one floor is required");
+            return;
+        }
+        for (int i = 0; i < floors.length; i++) {
+            if (floors[i] < 0 || floors[i] >= raw.sizeY()) {
+                issues.error("Floor layer " + floors[i] + " is outside the schematic height");
+            } else if (i > 0 && floors[i] <= floors[i - 1]) {
+                issues.error("Floors must be listed from bottom to top without repeats");
+            }
+        }
     }
 
     private static void validateMetadata(SchematicMetadata metadata, IssueCollector issues) {

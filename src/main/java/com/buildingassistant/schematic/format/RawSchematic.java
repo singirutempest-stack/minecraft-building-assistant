@@ -9,6 +9,7 @@ import java.util.List;
  * @param palette block state strings such as {@code minecraft:oak_stairs[facing=north]}
  * @param blocks  flattened entries of {@link SchematicFormat#BLOCK_STRIDE} integers each:
  *                x, y, z, palette index, stage index ({@link SchematicFormat#COMMON_STAGE} for shared blocks)
+ * @param floors  layers on which a storey begins, ascending; lets the player jump between storeys
  */
 public record RawSchematic(
         int formatVersion,
@@ -19,7 +20,11 @@ public record RawSchematic(
         List<String> palette,
         List<StageDefinition> stages,
         int[] blocks,
-        PreviewInfo preview) {
+        PreviewInfo preview,
+        int[] floors) {
+
+    /** Used when a file does not list floors: the whole build is one floor starting at the bottom. */
+    public static final int[] SINGLE_FLOOR = {0};
 
     public int blockCount() {
         return blocks.length / SchematicFormat.BLOCK_STRIDE;

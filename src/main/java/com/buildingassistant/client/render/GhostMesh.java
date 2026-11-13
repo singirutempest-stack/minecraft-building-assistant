@@ -1,6 +1,7 @@
 package com.buildingassistant.client.render;
 
 import com.buildingassistant.BuildingAssistant;
+import com.buildingassistant.project.BuildView;
 import com.buildingassistant.transform.SchematicProjection;
 import com.buildingassistant.validation.ValidationState;
 import com.mojang.blaze3d.systems.RenderSystem;
@@ -72,15 +73,17 @@ final class GhostMesh {
      * Brings the geometry up to date and rebuilds only the layers whose content changed.
      *
      * @param validation what is known about the world, or null to draw every block as a ghost
+     * @param view       the player's layer and stage selection; blocks outside it are not drawn
      * @param blockEntityGhosts true when beds, chests and similar blocks are drawn separately by
      *                          {@link GhostBlockEntities} and must be left out here
      * @param rebuildAll true when the build's shape or the style changed and nothing can be reused
      */
-    void sync(SchematicProjection projection, @Nullable ValidationState validation, boolean outline,
-              boolean blockEntityGhosts, ClientLevel level, boolean rebuildAll) {
+    void sync(SchematicProjection projection, @Nullable ValidationState validation, BuildView view,
+              int neighbourRange, boolean outline, boolean blockEntityGhosts, ClientLevel level,
+              boolean rebuildAll) {
         this.blockEntityGhosts = blockEntityGhosts;
         int layerCount = projection.layerCount();
-        byte[] kinds = kindsOf(projection, validation);
+        byte[] kinds = kindsOf(projection, validation, view, neighbourRange);
         if (rebuildAll || layers.length != layerCount || builtKinds.length != kinds.length || this.outline != outline) {
             close();
             layers = new VertexBuffer[layerCount];
@@ -117,22 +120,26 @@ final class GhostMesh {
         }
     }
 
-    private static byte[] kindsOf(SchematicProjection projection, @Nullable ValidationState validation) {
+    private static byte[] kindsOf(SchematicProjection projection, @Nullable ValidationState validation,
+                                  BuildView view, int neighbourRange) {
         byte[] kinds = new byte[projection.size()];
         for (int i = 0; i < kinds.length; i++) {
             if (projection.stateAt(i).isAir()) {
                 // Clearance entries mark free space; there is nothing to draw.
                 kinds[i] = KIND_ABSENT;
-            } else if (validation == null) {
-                kinds[i] = KIND_GHOST;
+                continue;
+            }
+            byte status = validation == null ? ValidationState.MISSING : validation.statusAt(i);
+            if (status == ValidationState.CORRECT) {
+                // A placed block hides neighbouring ghost faces whether or not its layer is selected.
+                kinds[i] = KIND_PLACED;
+            } else if (status == ValidationState.WRONG) {
+                // A wrong block is marked by a highlight instead; its real shape is unknown here,
+                // so it must not hide any ghost faces.
+                kinds[i] = KIND_ABSENT;
             } else {
-                kinds[i] = switch (validation.statusAt(i)) {
-                    case ValidationState.CORRECT -> KIND_PLACED;
-                    // A wrong block is marked by a highlight instead; its real shape is unknown here,
-                    // so it must not hide any ghost faces.
-                    case ValidationState.WRONG -> KIND_ABSENT;
-                    default -> KIND_GHOST;
-                };
+                boolean visible = view.isVisible(projection.layerAt(i), projection.stageAt(i), neighbourRange);
+                kinds[i] = visible ? KIND_GHOST : KIND_ABSENT;
             }
         }
         return kinds;

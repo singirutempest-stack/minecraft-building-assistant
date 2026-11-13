@@ -4,6 +4,7 @@ import com.buildingassistant.BuildingAssistant;
 import com.buildingassistant.config.ClientConfig;
 import com.buildingassistant.config.GhostStyle;
 import com.buildingassistant.project.BuildProject;
+import com.buildingassistant.project.BuildView;
 import com.buildingassistant.project.ProjectManager;
 import com.buildingassistant.transform.SchematicProjection;
 import com.buildingassistant.validation.ValidationState;
@@ -121,12 +122,13 @@ public final class GhostRenderer {
         float green = ((rgb >> 8) & 0xFF) / 255.0F;
         float blue = (rgb & 0xFF) / 255.0F;
         boolean blockEntityGhosts = !outline && GhostBlockEntities.isAvailable();
+        int neighbourRange = ClientConfig.NEIGHBOUR_LAYER_RANGE.get();
         boolean highlightErrors = ClientConfig.HIGHLIGHT_WRONG_BLOCKS.get();
         int wrongColor = ClientConfig.color(ClientConfig.WRONG_COLOR);
         int clearanceColor = ClientConfig.color(ClientConfig.CLEARANCE_COLOR);
 
         for (BuildProject project : manager.projects()) {
-            if (!project.visible() || project.dimension() != level.dimension()) {
+            if (!project.isActive() || project.dimension() != level.dimension()) {
                 continue;
             }
             SchematicProjection projection = project.projection();
@@ -149,9 +151,12 @@ public final class GhostRenderer {
                     || cached.blockEntityGhosts != blockEntityGhosts
                     || cached.supportGeneration != GhostBlockEntities.supportGeneration() || !cached.built;
             int validationVersion = validation == null ? -1 : validation.version();
+            BuildView view = project.view();
             if (rebuildAll || cached.validation != validation || cached.validationVersion != validationVersion
-                    || cached.projection != projection) {
-                cached.mesh.sync(projection, validation, outline, blockEntityGhosts, level, rebuildAll);
+                    || cached.projection != projection || cached.viewVersion != view.version()
+                    || cached.neighbourRange != neighbourRange) {
+                cached.mesh.sync(projection, validation, view, neighbourRange, outline, blockEntityGhosts,
+                        level, rebuildAll);
                 if (blockEntityGhosts) {
                     cached.blockEntities.sync(projection, cached.mesh.kinds(), level);
                 } else {
@@ -165,9 +170,11 @@ public final class GhostRenderer {
                 cached.validation = validation;
                 cached.validationVersion = validationVersion;
                 cached.projection = projection;
+                cached.viewVersion = view.version();
+                cached.neighbourRange = neighbourRange;
             }
             if (highlightErrors) {
-                cached.highlights.sync(validation, wrongColor, clearanceColor);
+                cached.highlights.sync(validation, view, neighbourRange, wrongColor, clearanceColor);
             }
 
             BlockPos anchor = project.placement().anchor();
@@ -274,6 +281,8 @@ public final class GhostRenderer {
         int validationVersion;
         @Nullable
         SchematicProjection projection;
+        int viewVersion = -1;
+        int neighbourRange;
 
         void close() {
             mesh.close();

@@ -41,12 +41,14 @@ public final class Schematic {
     private final short[] paletteIndices;
     private final byte[] stageIndices;
     private final PreviewInfo preview;
+    private final int[] floors;
 
     private final int entryCount;
     private final int requiredBlockCount;
     /** Required blocks per stage; the last element counts blocks of the common stage. */
     private final int[] requiredPerStage;
     private final int[] requiredPerLayer;
+    private final int[] firstLayerPerStage;
 
     private Schematic(Builder builder) {
         this.metadata = builder.metadata;
@@ -58,11 +60,14 @@ public final class Schematic {
         this.paletteIndices = builder.paletteIndices;
         this.stageIndices = builder.stageIndices;
         this.preview = builder.preview;
+        this.floors = builder.floors.clone();
 
         int entries = 0;
         int required = 0;
         int[] perStage = new int[stages.size() + 1];
         int[] perLayer = new int[sizeY];
+        int[] firstLayers = new int[stages.size() + 1];
+        Arrays.fill(firstLayers, -1);
         for (int cell = 0; cell < paletteIndices.length; cell++) {
             short paletteIndex = paletteIndices[cell];
             if (paletteIndex == EMPTY) {
@@ -74,9 +79,16 @@ public final class Schematic {
             }
             required++;
             int stage = stageIndices[cell];
-            perStage[stage == SchematicFormat.COMMON_STAGE ? stages.size() : stage]++;
-            perLayer[cell / (sizeX * sizeZ)]++;
+            int stageSlot = stage == SchematicFormat.COMMON_STAGE ? stages.size() : stage;
+            int layer = cell / (sizeX * sizeZ);
+            perStage[stageSlot]++;
+            perLayer[layer]++;
+            // Cells are visited from the bottom layer up, so the first hit is the lowest layer.
+            if (firstLayers[stageSlot] < 0) {
+                firstLayers[stageSlot] = layer;
+            }
         }
+        this.firstLayerPerStage = firstLayers;
         this.entryCount = entries;
         this.requiredBlockCount = required;
         this.requiredPerStage = perStage;
@@ -132,6 +144,26 @@ public final class Schematic {
 
     public int requiredBlocksInLayer(int y) {
         return requiredPerLayer[y];
+    }
+
+    /** Lowest layer containing a block of the stage, or -1 when the stage has none. */
+    public int firstLayerOfStage(int stage) {
+        return firstLayerPerStage[stage == SchematicFormat.COMMON_STAGE ? stages.size() : stage];
+    }
+
+    /** Index of the stage with the given id, or -1. */
+    public int stageIndex(String stageId) {
+        for (int i = 0; i < stages.size(); i++) {
+            if (stages.get(i).id().equals(stageId)) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /** Layers on which a storey begins, from bottom to top. Never empty. */
+    public int[] floors() {
+        return floors.clone();
     }
 
     public boolean inBounds(int x, int y, int z) {
@@ -193,7 +225,7 @@ public final class Schematic {
             }
         }
         return new RawSchematic(SchematicFormat.FORMAT_VERSION, metadata, sizeX, sizeY, sizeZ,
-                paletteStrings, stages, blocks, preview);
+                paletteStrings, stages, blocks, preview, floors.clone());
     }
 
     private int cellIndex(int x, int y, int z) {
@@ -218,6 +250,7 @@ public final class Schematic {
         private final short[] paletteIndices;
         private final byte[] stageIndices;
         private PreviewInfo preview = PreviewInfo.DEFAULT;
+        private int[] floors = RawSchematic.SINGLE_FLOOR;
 
         public Builder(SchematicMetadata metadata, int sizeX, int sizeY, int sizeZ, List<StageDefinition> stages) {
             if (sizeX < 1 || sizeY < 1 || sizeZ < 1
@@ -240,6 +273,12 @@ public final class Schematic {
 
         public Builder preview(PreviewInfo preview) {
             this.preview = preview;
+            return this;
+        }
+
+        /** Layers on which a storey begins; expected to be validated by the caller. */
+        public Builder floors(int[] floors) {
+            this.floors = floors.length == 0 ? RawSchematic.SINGLE_FLOOR : floors;
             return this;
         }
 

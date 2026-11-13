@@ -70,11 +70,36 @@ public final class SchematicJsonCodec {
         List<StageDefinition> stages = parseStages(object.get("stages"), issues);
         int[] blocks = parseBlocks(object.get("blocks"), issues);
         PreviewInfo preview = parsePreview(object.get("preview"), issues);
+        int[] floors = parseFloors(object.get("floors"), issues);
 
-        if (metadata == null || size == null || palette == null || stages == null || blocks == null) {
+        if (metadata == null || size == null || palette == null || stages == null || blocks == null || floors == null) {
             return null;
         }
-        return new RawSchematic(version.getAsInt(), metadata, size[0], size[1], size[2], palette, stages, blocks, preview);
+        return new RawSchematic(version.getAsInt(), metadata, size[0], size[1], size[2], palette, stages, blocks,
+                preview, floors);
+    }
+
+    /** Optional field; absent means a single floor. */
+    @Nullable
+    private static int[] parseFloors(@Nullable JsonElement element, IssueCollector issues) {
+        if (element == null || element.isJsonNull()) {
+            return RawSchematic.SINGLE_FLOOR.clone();
+        }
+        if (!element.isJsonArray() || element.getAsJsonArray().size() > SchematicFormat.MAX_SIZE) {
+            issues.error("Field 'floors' must be a list of layer numbers");
+            return null;
+        }
+        JsonArray array = element.getAsJsonArray();
+        int[] floors = new int[array.size()];
+        for (int i = 0; i < floors.length; i++) {
+            OptionalInt value = asInt(array.get(i));
+            if (value.isEmpty()) {
+                issues.error("Field 'floors' must be a list of layer numbers");
+                return null;
+            }
+            floors[i] = value.getAsInt();
+        }
+        return floors;
     }
 
     @Nullable
@@ -276,6 +301,12 @@ public final class SchematicJsonCodec {
         previewJson.addProperty("yaw", raw.preview().yaw());
         previewJson.addProperty("pitch", raw.preview().pitch());
         out.append("  \"preview\": ").append(GSON.toJson(previewJson)).append(",\n");
+
+        out.append("  \"floors\": [");
+        for (int i = 0; i < raw.floors().length; i++) {
+            out.append(i > 0 ? ", " : "").append(raw.floors()[i]);
+        }
+        out.append("],\n");
 
         out.append("  \"blocks\": [\n");
         int[] blocks = raw.blocks();

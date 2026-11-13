@@ -58,7 +58,7 @@ public final class SchematicResolver {
         }
 
         Schematic.Builder builder = new Schematic.Builder(
-                raw.metadata(), raw.sizeX(), raw.sizeY(), raw.sizeZ(), raw.stages()).preview(raw.preview());
+                raw.metadata(), raw.sizeX(), raw.sizeY(), raw.sizeZ(), raw.stages()).preview(raw.preview()).floors(raw.floors());
         for (int offset = 0; offset < blocks.length; offset += SchematicFormat.BLOCK_STRIDE) {
             boolean stored = builder.set(blocks[offset], blocks[offset + 1], blocks[offset + 2],
                     states[blocks[offset + 3]], blocks[offset + 4]);

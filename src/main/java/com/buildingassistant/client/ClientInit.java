@@ -37,6 +37,8 @@ public final class ClientInit {
         MinecraftForge.EVENT_BUS.addListener(ClientValidation::onTagsUpdated);
         MinecraftForge.EVENT_BUS.addListener(GhostRenderer::onRenderLevelStage);
         MinecraftForge.EVENT_BUS.addListener(BuildingAssistantCommand::register);
+        MinecraftForge.EVENT_BUS.addListener(ClientPersistence::onLoggingIn);
+        MinecraftForge.EVENT_BUS.addListener(ClientPersistence::onClientTick);
         MinecraftForge.EVENT_BUS.addListener(ClientInit::onLoggingOut);
     }
 
@@ -56,6 +58,8 @@ public final class ClientInit {
     }
 
     private static void onLoggingOut(ClientPlayerNetworkEvent.LoggingOut event) {
+        // Save first: the next lines discard the projects.
+        ClientPersistence.saveNowAndClose();
         GhostRenderer.reset();
         ProjectManager.get().clear();
     }

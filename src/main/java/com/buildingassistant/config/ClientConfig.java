@@ -29,6 +29,7 @@ public final class ClientConfig {
     public static final ForgeConfigSpec.IntValue RESCAN_INTERVAL_TICKS;
 
     public static final ForgeConfigSpec.IntValue NEIGHBOUR_LAYER_RANGE;
+    public static final ForgeConfigSpec.BooleanValue AUTO_ADVANCE_STAGE;
 
     public static final ForgeConfigSpec.BooleanValue HUD_ENABLED;
     public static final ForgeConfigSpec.EnumValue<HudCorner> HUD_CORNER;
@@ -59,7 +60,8 @@ public final class ClientConfig {
 
         builder.comment("Checking placed blocks against the schematic").push("validation");
         VALIDATION_MODE = builder
-                .comment("STRICT: block and state must match. FLEXIBLE: blocks of the same material group are accepted.")
+                .comment("Checking mode for newly started builds.",
+                        "STRICT: block and state must match. FLEXIBLE: blocks of the same material group are accepted.")
                 .defineEnum("mode", ValidationMode.STRICT);
         IGNORED_PROPERTIES = builder
                 .comment("Block state properties that are never compared. These change on their own while playing",
@@ -82,6 +84,12 @@ public final class ClientConfig {
         NEIGHBOUR_LAYER_RANGE = builder
                 .comment("How many layers above and below the current one are shown in the neighbour-layer mode.")
                 .defineInRange("neighbourRange", 1, 1, 7);
+        builder.pop();
+
+        builder.comment("Build stages").push("stages");
+        AUTO_ADVANCE_STAGE = builder
+                .comment("When the current stage is finished, switch to the next unfinished one.")
+                .define("autoAdvance", true);
         builder.pop();
 
         builder.comment("Progress panel").push("hud");

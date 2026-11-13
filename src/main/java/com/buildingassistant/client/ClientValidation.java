@@ -3,6 +3,7 @@ package com.buildingassistant.client;
 import com.buildingassistant.BuildingAssistant;
 import com.buildingassistant.config.ClientConfig;
 import com.buildingassistant.project.BuildProject;
+import com.buildingassistant.project.BuildView;
 import com.buildingassistant.project.ProjectManager;
 import com.buildingassistant.validation.BlockMatcher;
 import com.buildingassistant.validation.BuildingValidator;
@@ -16,9 +17,13 @@ import net.minecraftforge.event.TagsUpdatedEvent;
 import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.fml.loading.FMLPaths;
 
+import javax.annotation.Nullable;
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.EnumMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Keeps the validation state of every project in step with the world the client sees.
@@ -29,10 +34,10 @@ import java.util.List;
 public final class ClientValidation {
 
     private static MaterialGroups groups = MaterialGroups.defaults();
-    private static BuildingValidator validator;
+    /** One validator per checking mode; empty until first needed and after settings change. */
+    private static final Map<ValidationMode, BuildingValidator> VALIDATORS = new EnumMap<>(ValidationMode.class);
 
-    /** Settings the current validator was built from; a difference means it has to be rebuilt. */
-    private static ValidationMode builtMode;
+    /** Settings the current validators were built from; a difference means they have to be rebuilt. */
     private static List<? extends String> builtIgnoredProperties;
     private static boolean builtCheckClearance;
 
@@ -46,7 +51,7 @@ public final class ClientValidation {
         if (loaded.problem() != null) {
             BuildingAssistant.LOGGER.warn("Material groups file {}: {}", file, loaded.problem());
         }
-        if (!file.toFile().isFile()) {
+        if (!Files.isRegularFile(file)) {
             try {
                 loaded.groups().save(file);
             } catch (IOException e) {
@@ -68,9 +73,9 @@ public final class ClientValidation {
         invalidate();
     }
 
-    /** Drops the validator so that it is rebuilt from current settings and every build is re-checked. */
+    /** Drops the validators so that they are rebuilt from current settings and every build is re-checked. */
     public static void invalidate() {
-        validator = null;
+        VALIDATORS.clear();
     }
 
     public static void onClientTick(TickEvent.ClientTickEvent event) {
@@ -82,12 +87,13 @@ public final class ClientValidation {
         if (level == null || projects.isEmpty()) {
             return;
         }
-        boolean rebuilt = ensureValidator();
+        boolean rebuilt = ensureValidators();
         int interval = ClientConfig.RESCAN_INTERVAL_TICKS.get();
         for (BuildProject project : projects) {
-            if (project.dimension() != level.dimension()) {
+            if (project.paused() || project.dimension() != level.dimension()) {
                 continue;
             }
+            BuildingValidator validator = VALIDATORS.get(project.validationMode());
             ValidationState state = project.validation();
             if (state == null || rebuilt || state.projection() != project.projection()) {
                 state = new ValidationState(project.projection());
@@ -103,40 +109,65 @@ public final class ClientValidation {
                     && state.statusAt(selected) != ValidationState.OBSTRUCTED) {
                 project.setSelectedError(-1);
             }
-        }
-    }
-
-    /** Called for every block change the client learns about. */
-    public static void onBlockChanged(ClientLevel level, BlockPos pos) {
-        if (validator == null) {
-            return;
-        }
-        for (BuildProject project : ProjectManager.get().projects()) {
-            ValidationState state = project.validation();
-            if (state != null && project.dimension() == level.dimension()
-                    && state.projection() == project.projection()) {
-                validator.checkPosition(state, level, pos);
+            if (project == ProjectManager.get().current()) {
+                announceFinishedStage(project, state);
             }
         }
     }
 
-    /** The validator in use, or null before the first tick with a project. */
-    public static BuildingValidator validator() {
-        return validator;
+    /**
+     * Tells the player once when the stage they are working on is finished and, if enabled, moves on to
+     * the next unfinished stage.
+     */
+    private static void announceFinishedStage(BuildProject project, ValidationState state) {
+        BuildView view = project.view();
+        int stage = view.stage();
+        if (view.stageMode() == BuildView.StageMode.ALL || !state.isStageComplete(stage)) {
+            if (project.announcedStage() == stage) {
+                // The stage was finished and then broken again; announce it again when it is redone.
+                project.setAnnouncedStage(-1);
+            }
+            return;
+        }
+        if (project.announcedStage() == stage) {
+            return;
+        }
+        project.setAnnouncedStage(stage);
+        ProjectActions.onStageCompleted(project, stage, state);
     }
 
-    /** @return true when a new validator was created */
-    private static boolean ensureValidator() {
-        ValidationMode mode = ClientConfig.VALIDATION_MODE.get();
+    /** Called for every block change the client learns about. */
+    public static void onBlockChanged(ClientLevel level, BlockPos pos) {
+        if (VALIDATORS.isEmpty()) {
+            return;
+        }
+        for (BuildProject project : ProjectManager.get().projects()) {
+            ValidationState state = project.validation();
+            if (state != null && !project.paused() && project.dimension() == level.dimension()
+                    && state.projection() == project.projection()) {
+                VALIDATORS.get(project.validationMode()).checkPosition(state, level, pos);
+            }
+        }
+    }
+
+    /** The validator used for a project, or null before the first tick with a project. */
+    @Nullable
+    public static BuildingValidator validatorFor(BuildProject project) {
+        return VALIDATORS.get(project.validationMode());
+    }
+
+    /** @return true when new validators were created */
+    private static boolean ensureValidators() {
         List<? extends String> ignored = ClientConfig.IGNORED_PROPERTIES.get();
         boolean checkClearance = ClientConfig.CHECK_CLEARANCE.get();
-        if (validator != null && mode == builtMode && checkClearance == builtCheckClearance
-                && ignored.equals(builtIgnoredProperties)) {
+        if (!VALIDATORS.isEmpty() && checkClearance == builtCheckClearance && ignored.equals(builtIgnoredProperties)) {
             return false;
         }
         groups.resolve();
-        validator = new BuildingValidator(new BlockMatcher(mode, List.copyOf(ignored), groups), checkClearance);
-        builtMode = mode;
+        VALIDATORS.clear();
+        for (ValidationMode mode : ValidationMode.values()) {
+            VALIDATORS.put(mode, new BuildingValidator(new BlockMatcher(mode, List.copyOf(ignored), groups), checkClearance));
+        }
         builtIgnoredProperties = List.copyOf(ignored);
         builtCheckClearance = checkClearance;
         return true;

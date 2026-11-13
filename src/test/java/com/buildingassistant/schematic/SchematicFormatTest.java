@@ -178,6 +178,37 @@ class SchematicFormatTest {
     }
 
     @Test
+    void floorsDefaultToASingleFloorAndCanBeListed() {
+        RawSchematic withoutFloors = SchematicJsonCodec.parse(new StringReader(VALID), new IssueCollector());
+        assertNotNull(withoutFloors);
+        assertArrayEquals(new int[]{0}, withoutFloors.floors());
+
+        String json = VALID.replace("\"preview\":", "\"floors\": [0, 1], \"preview\":");
+        IssueCollector issues = new IssueCollector();
+        RawSchematic withFloors = SchematicJsonCodec.parse(new StringReader(json), issues);
+        assertNotNull(withFloors, () -> String.join("; ", issues.errors()));
+        RawSchematicValidator.validate(withFloors, issues);
+        assertFalse(issues.hasErrors(), () -> String.join("; ", issues.errors()));
+        assertArrayEquals(new int[]{0, 1}, withFloors.floors());
+
+        // Floors are kept when the schematic is written again.
+        RawSchematic copy = SchematicJsonCodec.parse(
+                new StringReader(SchematicJsonCodec.toJsonString(withFloors)), new IssueCollector());
+        assertNotNull(copy);
+        assertArrayEquals(new int[]{0, 1}, copy.floors());
+    }
+
+    @Test
+    void invalidFloorsAreRejected() {
+        assertValidationFails(VALID.replace("\"preview\":", "\"floors\": [0, 2], \"preview\":"), "outside the schematic height");
+        assertValidationFails(VALID.replace("\"preview\":", "\"floors\": [1, 0], \"preview\":"), "bottom to top");
+        assertValidationFails(VALID.replace("\"preview\":", "\"floors\": [0, 0], \"preview\":"), "bottom to top");
+        assertValidationFails(VALID.replace("\"preview\":", "\"floors\": [], \"preview\":"), "At least one floor");
+        assertParseFails(VALID.replace("\"preview\":", "\"floors\": \"ground\", \"preview\":"));
+        assertParseFails(VALID.replace("\"preview\":", "\"floors\": [0.5], \"preview\":"));
+    }
+
+    @Test
     void emptyBlockListIsRejected() {
         String json = VALID.substring(0, VALID.indexOf("\"blocks\"")) + "\"blocks\": []\n}";
         assertValidationFails(json, "no blocks");

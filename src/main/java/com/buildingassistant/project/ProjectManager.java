@@ -23,6 +23,7 @@ public final class ProjectManager {
     @Nullable
     private BuildProject current;
     private boolean ghostsVisible = true;
+    private boolean dirty;
 
     private ProjectManager() {
     }
@@ -34,9 +35,40 @@ public final class ProjectManager {
     /** Starts a new project and makes it the current one. */
     public BuildProject start(Schematic schematic, ResourceKey<Level> dimension, Placement placement) {
         BuildProject project = new BuildProject(UUID.randomUUID(), schematic, dimension, placement);
-        projects.add(project);
+        add(project);
         current = project;
         return project;
+    }
+
+    /** Adds an existing project, for example one restored from disk. */
+    public void add(BuildProject project) {
+        projects.add(project);
+        if (current == null) {
+            current = project;
+        }
+        dirty = true;
+    }
+
+    @Nullable
+    public BuildProject byId(UUID id) {
+        for (BuildProject project : projects) {
+            if (project.id().equals(id)) {
+                return project;
+            }
+        }
+        return null;
+    }
+
+    /** Notes that something worth saving changed. */
+    public void markDirty() {
+        dirty = true;
+    }
+
+    /** @return true when something changed since the last call */
+    public boolean consumeDirty() {
+        boolean wasDirty = dirty;
+        dirty = false;
+        return wasDirty;
     }
 
     public void remove(BuildProject project) {
@@ -44,12 +76,14 @@ public final class ProjectManager {
         if (current == project) {
             current = projects.isEmpty() ? null : projects.get(projects.size() - 1);
         }
+        dirty = true;
     }
 
     /** Forgets every project, for example when the player leaves the world. */
     public void clear() {
         projects.clear();
         current = null;
+        dirty = false;
     }
 
     @Nullable
@@ -58,8 +92,9 @@ public final class ProjectManager {
     }
 
     public void setCurrent(BuildProject project) {
-        if (projects.contains(project)) {
+        if (projects.contains(project) && current != project) {
             current = project;
+            dirty = true;
         }
     }
 
@@ -73,6 +108,9 @@ public final class ProjectManager {
     }
 
     public void setGhostsVisible(boolean ghostsVisible) {
-        this.ghostsVisible = ghostsVisible;
+        if (this.ghostsVisible != ghostsVisible) {
+            this.ghostsVisible = ghostsVisible;
+            dirty = true;
+        }
     }
 }

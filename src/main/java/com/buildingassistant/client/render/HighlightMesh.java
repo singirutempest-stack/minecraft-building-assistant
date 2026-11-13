@@ -1,5 +1,6 @@
 package com.buildingassistant.client.render;
 
+import com.buildingassistant.project.BuildView;
 import com.buildingassistant.transform.SchematicProjection;
 import com.buildingassistant.validation.ValidationState;
 import com.mojang.blaze3d.systems.RenderSystem;
@@ -35,21 +36,30 @@ final class HighlightMesh {
     @Nullable
     private ValidationState builtFrom;
     private int builtVersion;
+    private int builtViewVersion;
+    private int builtNeighbourRange;
     private int builtWrongColor;
     private int builtClearanceColor;
 
-    void sync(@Nullable ValidationState validation, int wrongColor, int clearanceColor) {
+    /**
+     * @param view errors outside the player's layer and stage selection are not marked
+     */
+    void sync(@Nullable ValidationState validation, BuildView view, int neighbourRange,
+              int wrongColor, int clearanceColor) {
         if (validation == null) {
             close();
             return;
         }
         if (validation == builtFrom && validation.version() == builtVersion
+                && view.version() == builtViewVersion && neighbourRange == builtNeighbourRange
                 && wrongColor == builtWrongColor && clearanceColor == builtClearanceColor) {
             return;
         }
         close();
         builtFrom = validation;
         builtVersion = validation.version();
+        builtViewVersion = view.version();
+        builtNeighbourRange = neighbourRange;
         builtWrongColor = wrongColor;
         builtClearanceColor = clearanceColor;
         if (validation.errors() == 0) {
@@ -66,6 +76,9 @@ final class HighlightMesh {
             for (int i = 0; i < projection.size(); i++) {
                 byte status = validation.statusAt(i);
                 if (status != ValidationState.WRONG && status != ValidationState.OBSTRUCTED) {
+                    continue;
+                }
+                if (!view.isVisible(projection.layerAt(i), projection.stageAt(i), neighbourRange)) {
                     continue;
                 }
                 long packed = projection.positionAt(i);

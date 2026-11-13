@@ -5,6 +5,7 @@ import com.buildingassistant.client.ProjectActions;
 import com.buildingassistant.config.ClientConfig;
 import com.buildingassistant.config.HudCorner;
 import com.buildingassistant.project.BuildProject;
+import com.buildingassistant.project.BuildView;
 import com.buildingassistant.project.ProjectManager;
 import com.buildingassistant.transform.SchematicProjection;
 import com.buildingassistant.validation.BlockMatcher;
@@ -66,33 +67,60 @@ public final class ProgressHud {
         if (project == null || project.dimension() != minecraft.level.dimension()) {
             return;
         }
+        Font font = minecraft.font;
+        Component title = ProjectActions.displayName(project.schematic());
+        if (project.paused()) {
+            drawPanel(graphics, font, screenWidth, screenHeight, title, -1.0F, false,
+                    List.of(new Line(Component.translatable("buildingassistant.hud.paused"), MUTED_COLOR)));
+            return;
+        }
         ValidationState validation = project.validation();
         if (validation == null || validation.projection() != project.projection()) {
             return;
         }
 
-        Font font = minecraft.font;
-        Component title = ProjectActions.displayName(project.schematic());
         List<Line> lines = new ArrayList<>();
         lines.add(new Line(Component.translatable("buildingassistant.hud.progress",
                 Math.round(validation.progress() * 100.0F), validation.correct(), validation.required()),
                 MUTED_COLOR));
+
+        BuildView view = project.view();
+        int stage = view.stage();
+        lines.add(new Line(Component.translatable("buildingassistant.hud.stage", stage + 1, view.stageCount(),
+                ProjectActions.stageName(project.schematic(), stage),
+                validation.correctInStage(stage), validation.requiredInStage(stage)),
+                validation.isStageComplete(stage) ? DONE_COLOR
+                        : view.stageMode() == BuildView.StageMode.ALL ? MUTED_COLOR : TEXT_COLOR));
+        if (view.layerMode() != BuildView.LayerMode.ALL) {
+            int layer = view.layer();
+            lines.add(new Line(Component.translatable("buildingassistant.hud.layer", layer + 1, view.layerCount(),
+                    validation.correctInLayer(layer), project.schematic().requiredBlocksInLayer(layer)), TEXT_COLOR));
+        }
         if (validation.isComplete()) {
             lines.add(new Line(Component.translatable("buildingassistant.hud.complete"), DONE_COLOR));
         } else if (validation.errors() > 0) {
             lines.add(new Line(Component.translatable("buildingassistant.hud.errors", validation.errors()), ERROR_COLOR));
         }
-        Component hint = crosshairHint(minecraft, validation);
+        Component hint = crosshairHint(minecraft, project, validation);
         if (hint != null) {
             lines.add(new Line(hint, ERROR_COLOR));
         }
 
+        drawPanel(graphics, font, screenWidth, screenHeight, title, validation.progress(), validation.isComplete(), lines);
+    }
+
+    /**
+     * @param progress share of the bar to fill, or a negative value to leave the bar out
+     */
+    private static void drawPanel(GuiGraphics graphics, Font font, int screenWidth, int screenHeight,
+                                  Component title, float progress, boolean complete, List<Line> lines) {
+        boolean hasBar = progress >= 0.0F;
         int contentWidth = Math.max(MIN_WIDTH, font.width(title));
         for (Line line : lines) {
             contentWidth = Math.max(contentWidth, font.width(line.text()));
         }
         int width = contentWidth + PADDING * 2;
-        int height = PADDING * 2 + LINE_HEIGHT + BAR_HEIGHT + 3 + lines.size() * LINE_HEIGHT;
+        int height = PADDING * 2 + LINE_HEIGHT + (hasBar ? BAR_HEIGHT + 3 : 0) + lines.size() * LINE_HEIGHT;
 
         HudCorner corner = ClientConfig.HUD_CORNER.get();
         int x = corner.isRight() ? screenWidth - width - MARGIN : MARGIN;
@@ -106,14 +134,15 @@ public final class ProgressHud {
         graphics.drawString(font, title, textX, cursorY, TEXT_COLOR, true);
         cursorY += LINE_HEIGHT;
 
-        int barWidth = width - PADDING * 2;
-        graphics.fill(textX, cursorY, textX + barWidth, cursorY + BAR_HEIGHT, BAR_BACKGROUND);
-        int filled = Math.round(barWidth * validation.progress());
-        if (filled > 0) {
-            graphics.fill(textX, cursorY, textX + filled, cursorY + BAR_HEIGHT,
-                    validation.isComplete() ? BAR_FILL_DONE : BAR_FILL);
+        if (hasBar) {
+            int barWidth = width - PADDING * 2;
+            graphics.fill(textX, cursorY, textX + barWidth, cursorY + BAR_HEIGHT, BAR_BACKGROUND);
+            int filled = Math.round(barWidth * Math.min(1.0F, progress));
+            if (filled > 0) {
+                graphics.fill(textX, cursorY, textX + filled, cursorY + BAR_HEIGHT, complete ? BAR_FILL_DONE : BAR_FILL);
+            }
+            cursorY += BAR_HEIGHT + 3;
         }
-        cursorY += BAR_HEIGHT + 3;
 
         for (Line line : lines) {
             graphics.drawString(font, line.text(), textX, cursorY, line.color(), true);
@@ -123,7 +152,7 @@ public final class ProgressHud {
 
     /** Explains what is wrong with the block under the crosshair, or null when nothing is wrong there. */
     @Nullable
-    private static Component crosshairHint(Minecraft minecraft, ValidationState validation) {
+    private static Component crosshairHint(Minecraft minecraft, BuildProject project, ValidationState validation) {
         HitResult hit = minecraft.hitResult;
         if (hit == null || hit.getType() != HitResult.Type.BLOCK || !(hit instanceof BlockHitResult blockHit)) {
             return null;
@@ -141,7 +170,7 @@ public final class ProgressHud {
             return null;
         }
         BlockState expected = projection.stateAt(index);
-        BuildingValidator validator = ClientValidation.validator();
+        BuildingValidator validator = ClientValidation.validatorFor(project);
         BlockState actual = minecraft.level.getBlockState(blockHit.getBlockPos());
         boolean wrongState = validator != null
                 && validator.matcher().compare(expected, actual) == BlockMatcher.Result.WRONG_STATE;

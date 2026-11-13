@@ -30,6 +30,7 @@
     {"id": "decoration", "name": "Decoration"}
   ],
   "preview": {"yaw": 215.0, "pitch": 25.0},
+  "floors": [0],
   "blocks": [
     [0, 0, 1, 0, 0],
     [1, 0, 1, 0, 0],

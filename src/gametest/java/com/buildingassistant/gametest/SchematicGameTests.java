@@ -21,6 +21,7 @@ import java.io.IOException;
 import java.io.StringReader;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
 
 import static com.buildingassistant.gametest.TestSupport.check;
 import static com.buildingassistant.gametest.TestSupport.checkEquals;
@@ -122,6 +123,36 @@ public final class SchematicGameTests {
         } finally {
             Files.deleteIfExists(file);
         }
+        helper.succeed();
+    }
+
+    @GameTest(template = TestSupport.EMPTY_TEMPLATE)
+    public static void stagesAndFloorsAreExposed(GameTestHelper helper) throws IOException {
+        // Stage 0 has blocks on layers 0 and 2, stage 1 only on layer 1. Floors start at layers 0 and 2.
+        String json = schematicJson(1, 3, 1, "\"minecraft:cobblestone\"",
+                "[0, 0, 0, 0, 0], [0, 1, 0, 0, 1], [0, 2, 0, 0, 0]")
+                .replace("\"blocks\":", "\"floors\": [0, 2], \"blocks\":");
+        Schematic schematic = load(json);
+
+        checkEquals(0, schematic.stageIndex("foundation"), "index of the first stage");
+        checkEquals(1, schematic.stageIndex("walls"), "index of the second stage");
+        checkEquals(-1, schematic.stageIndex("roof"), "index of a stage the build does not have");
+        checkEquals(0, schematic.firstLayerOfStage(0), "first layer of stage 0");
+        checkEquals(1, schematic.firstLayerOfStage(1), "first layer of stage 1");
+        checkEquals(-1, schematic.firstLayerOfStage(SchematicFormat.COMMON_STAGE), "common stage has no blocks");
+        check(Arrays.equals(new int[]{0, 2}, schematic.floors()), "floors");
+
+        Path file = Files.createTempFile("buildingassistant-test", SchematicFormat.FILE_EXTENSION);
+        try {
+            SchematicLoader.write(schematic, file);
+            LoadResult result = SchematicLoader.read(file);
+            check(result.isSuccess(), "saved schematic must load: " + result.errors());
+            check(Arrays.equals(new int[]{0, 2}, result.schematic().floors()), "floors after saving");
+        } finally {
+            Files.deleteIfExists(file);
+        }
+        check(Arrays.equals(new int[]{0}, load(schematicJson(2, 2, 1, HUT_PALETTE, HUT_BLOCKS)).floors()),
+                "a schematic without listed floors has a single floor");
         helper.succeed();
     }
 
