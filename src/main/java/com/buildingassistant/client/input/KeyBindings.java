@@ -24,10 +24,11 @@ public final class KeyBindings {
     private static final KeyMapping MIRROR = key("mirror", GLFW.GLFW_KEY_V);
     private static final KeyMapping TOGGLE_GHOSTS = key("toggle_ghosts", GLFW.GLFW_KEY_H);
     private static final KeyMapping MOVE_TO_CROSSHAIR = key("move_to_crosshair", GLFW.GLFW_KEY_B);
+    private static final KeyMapping NEXT_ERROR = key("next_error", GLFW.GLFW_KEY_N);
 
     private static final KeyMapping[] ALL = {
             MOVE_FORWARD, MOVE_BACK, MOVE_LEFT, MOVE_RIGHT, MOVE_UP, MOVE_DOWN,
-            ROTATE, MIRROR, TOGGLE_GHOSTS, MOVE_TO_CROSSHAIR
+            ROTATE, MIRROR, TOGGLE_GHOSTS, MOVE_TO_CROSSHAIR, NEXT_ERROR
     };
 
     private KeyBindings() {
@@ -73,6 +74,9 @@ public final class KeyBindings {
         }
         while (MOVE_TO_CROSSHAIR.consumeClick()) {
             ProjectActions.moveToCrosshair();
+        }
+        while (NEXT_ERROR.consumeClick()) {
+            ProjectActions.nextError();
         }
     }
 

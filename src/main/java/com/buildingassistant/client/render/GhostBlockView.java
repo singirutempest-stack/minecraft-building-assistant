@@ -16,8 +16,8 @@ import net.minecraft.world.level.material.FluidState;
 import javax.annotation.Nullable;
 
 /**
- * A pretend world that contains only the ghost blocks of one build, addressed relative to the build's
- * anchor. The block renderer reads neighbours from it, so faces between two ghost blocks are culled and
+ * A pretend world that contains only the blocks of one build (ghosts and already placed ones), addressed
+ * relative to the build's anchor. The block renderer reads neighbours from it, so faces between two ghost blocks are culled and
  * ambient occlusion is computed between them, exactly as for real blocks.
  *
  * <p>Everything is fully lit: ghosts must stay readable at night and underground.
@@ -27,11 +27,16 @@ final class GhostBlockView implements BlockAndTintGetter {
     private static final int FULL_LIGHT = 15;
 
     private final SchematicProjection projection;
+    private final byte[] kinds;
     private final ClientLevel level;
     private final BlockPos anchor;
 
-    GhostBlockView(SchematicProjection projection, ClientLevel level) {
+    /**
+     * @param kinds per entry, one of the {@code GhostMesh.KIND_*} values; absent entries read as air
+     */
+    GhostBlockView(SchematicProjection projection, byte[] kinds, ClientLevel level) {
         this.projection = projection;
+        this.kinds = kinds;
         this.level = level;
         this.anchor = projection.placement().anchor();
     }
@@ -40,7 +45,8 @@ final class GhostBlockView implements BlockAndTintGetter {
     public BlockState getBlockState(BlockPos relative) {
         int index = projection.indexOf(BlockPos.asLong(
                 anchor.getX() + relative.getX(), anchor.getY() + relative.getY(), anchor.getZ() + relative.getZ()));
-        return index < 0 ? Blocks.AIR.defaultBlockState() : projection.stateAt(index);
+        return index < 0 || kinds[index] == GhostMesh.KIND_ABSENT
+                ? Blocks.AIR.defaultBlockState() : projection.stateAt(index);
     }
 
     @Override

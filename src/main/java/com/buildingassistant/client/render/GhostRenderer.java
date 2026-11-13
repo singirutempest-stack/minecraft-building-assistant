@@ -6,11 +6,17 @@ import com.buildingassistant.config.GhostStyle;
 import com.buildingassistant.project.BuildProject;
 import com.buildingassistant.project.ProjectManager;
 import com.buildingassistant.transform.SchematicProjection;
+import com.buildingassistant.validation.ValidationState;
 import com.mojang.blaze3d.systems.RenderSystem;
+import com.mojang.blaze3d.vertex.BufferBuilder;
+import com.mojang.blaze3d.vertex.BufferUploader;
 import com.mojang.blaze3d.vertex.PoseStack;
+import com.mojang.blaze3d.vertex.Tesselator;
 import net.minecraft.client.Camera;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.client.renderer.LevelRenderer;
+import net.minecraft.client.renderer.RenderType;
 import net.minecraft.client.renderer.culling.Frustum;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
@@ -114,6 +120,9 @@ public final class GhostRenderer {
         float red = ((rgb >> 16) & 0xFF) / 255.0F;
         float green = ((rgb >> 8) & 0xFF) / 255.0F;
         float blue = (rgb & 0xFF) / 255.0F;
+        boolean highlightErrors = ClientConfig.HIGHLIGHT_WRONG_BLOCKS.get();
+        int wrongColor = ClientConfig.color(ClientConfig.WRONG_COLOR);
+        int clearanceColor = ClientConfig.color(ClientConfig.CLEARANCE_COLOR);
 
         for (BuildProject project : manager.projects()) {
             if (!project.visible() || project.dimension() != level.dimension()) {
@@ -128,23 +137,71 @@ public final class GhostRenderer {
                 continue;
             }
 
+            // Use the validation result only when it describes the build where it stands right now.
+            ValidationState validation = project.validation();
+            if (validation != null && validation.projection() != projection) {
+                validation = null;
+            }
+
             CachedMesh cached = MESHES.computeIfAbsent(project.id(), id -> new CachedMesh());
-            if (cached.shapeVersion != project.shapeVersion() || cached.outline != outline || !cached.built) {
-                cached.mesh.rebuild(projection, outline, level);
+            boolean rebuildAll = cached.shapeVersion != project.shapeVersion() || cached.outline != outline
+                    || !cached.built;
+            int validationVersion = validation == null ? -1 : validation.version();
+            if (rebuildAll || cached.validation != validation || cached.validationVersion != validationVersion) {
+                cached.mesh.sync(projection, validation, outline, level, rebuildAll);
                 cached.shapeVersion = project.shapeVersion();
                 cached.outline = outline;
                 cached.built = true;
+                cached.validation = validation;
+                cached.validationVersion = validationVersion;
+            }
+            if (highlightErrors) {
+                cached.highlights.sync(validation, wrongColor, clearanceColor);
             }
 
             BlockPos anchor = project.placement().anchor();
             poseStack.pushPose();
             poseStack.translate(anchor.getX() - camera.x, anchor.getY() - camera.y, anchor.getZ() - camera.z);
             try {
-                cached.mesh.draw(poseStack.last().pose(), projectionMatrix,
+                Matrix4f modelView = poseStack.last().pose();
+                cached.mesh.draw(modelView, projectionMatrix,
                         0, cached.mesh.layerCount() - 1, red, green, blue, alpha, afterLevel);
+                if (highlightErrors) {
+                    cached.highlights.draw(modelView, projectionMatrix, afterLevel);
+                }
+                int selected = project.selectedError();
+                if (validation != null && selected >= 0 && selected < projection.size()) {
+                    long packed = projection.positionAt(selected);
+                    drawSelectionBox(poseStack, BlockPos.getX(packed) - anchor.getX(),
+                            BlockPos.getY(packed) - anchor.getY(), BlockPos.getZ(packed) - anchor.getZ(), afterLevel);
+                }
             } finally {
                 poseStack.popPose();
             }
+        }
+    }
+
+    /**
+     * Outlines the error the player navigated to. Drawn without depth test so it can be found through
+     * walls; a single box per frame, like the game's own block selection outline.
+     */
+    private static void drawSelectionBox(PoseStack poseStack, int x, int y, int z, boolean afterLevel) {
+        RenderType lines = RenderType.lines();
+        BufferBuilder builder = Tesselator.getInstance().getBuilder();
+        builder.begin(lines.mode(), lines.format());
+        float grow = 0.02F;
+        LevelRenderer.renderLineBox(poseStack, builder, x - grow, y - grow, z - grow,
+                x + 1 + grow, y + 1 + grow, z + 1 + grow, 1.0F, 1.0F, 0.2F, 1.0F);
+        lines.setupRenderState();
+        if (afterLevel) {
+            Minecraft.getInstance().getMainRenderTarget().bindWrite(false);
+        }
+        RenderSystem.disableDepthTest();
+        try {
+            BufferUploader.drawWithShader(builder.end());
+        } finally {
+            RenderSystem.enableDepthTest();
+            lines.clearRenderState();
         }
     }
 
@@ -158,7 +215,7 @@ public final class GhostRenderer {
     /** Frees all GPU resources. */
     public static void closeAll() {
         for (CachedMesh cached : MESHES.values()) {
-            cached.mesh.close();
+            cached.close();
         }
         MESHES.clear();
     }
@@ -184,7 +241,7 @@ public final class GhostRenderer {
                 }
             }
             if (!alive) {
-                entry.getValue().mesh.close();
+                entry.getValue().close();
                 iterator.remove();
             }
         }
@@ -192,8 +249,17 @@ public final class GhostRenderer {
 
     private static final class CachedMesh {
         final GhostMesh mesh = new GhostMesh();
+        final HighlightMesh highlights = new HighlightMesh();
         int shapeVersion;
         boolean outline;
         boolean built;
+        @Nullable
+        ValidationState validation;
+        int validationVersion;
+
+        void close() {
+            mesh.close();
+            highlights.close();
+        }
     }
 }

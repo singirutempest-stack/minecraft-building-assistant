@@ -3,9 +3,11 @@ package com.buildingassistant.project;
 import com.buildingassistant.schematic.Schematic;
 import com.buildingassistant.transform.Placement;
 import com.buildingassistant.transform.SchematicProjection;
+import com.buildingassistant.validation.ValidationState;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.world.level.Level;
 
+import javax.annotation.Nullable;
 import java.util.UUID;
 
 /**
@@ -24,6 +26,10 @@ public final class BuildProject {
 
     private SchematicProjection projection;
     private int shapeVersion;
+    @Nullable
+    private ValidationState validation;
+    /** Entry the player navigated to with "next error", or -1. */
+    private int selectedError = -1;
 
     public BuildProject(UUID id, Schematic schematic, ResourceKey<Level> dimension, Placement placement) {
         this.id = id;
@@ -54,6 +60,8 @@ public final class BuildProject {
         }
         placement = next;
         projection = null;
+        validation = null;
+        selectedError = -1;
     }
 
     public void move(int dx, int dy, int dz) {
@@ -81,6 +89,28 @@ public final class BuildProject {
             projection = SchematicProjection.create(schematic, placement);
         }
         return projection;
+    }
+
+    /**
+     * What is currently known about the build's blocks in the world, or null when the build has not been
+     * checked since it was placed or moved.
+     */
+    @Nullable
+    public ValidationState validation() {
+        return validation;
+    }
+
+    public void setValidation(@Nullable ValidationState validation) {
+        this.validation = validation;
+        this.selectedError = -1;
+    }
+
+    public int selectedError() {
+        return selectedError;
+    }
+
+    public void setSelectedError(int selectedError) {
+        this.selectedError = selectedError;
     }
 
     /**

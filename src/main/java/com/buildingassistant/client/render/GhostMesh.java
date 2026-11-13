@@ -2,6 +2,7 @@ package com.buildingassistant.client.render;
 
 import com.buildingassistant.BuildingAssistant;
 import com.buildingassistant.transform.SchematicProjection;
+import com.buildingassistant.validation.ValidationState;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vertex.BufferBuilder;
 import com.mojang.blaze3d.vertex.DefaultVertexFormat;
@@ -33,12 +34,14 @@ import net.minecraftforge.client.model.data.ModelData;
 import org.joml.Matrix3f;
 import org.joml.Matrix4f;
 
+import javax.annotation.Nullable;
+
 /**
  * GPU geometry of one build's ghost blocks, one vertex buffer per layer.
  *
- * <p>Geometry is stored relative to the build's anchor. Moving a build therefore costs nothing, and the
- * buffers are rebuilt only when the build's shape or the display style changes. Splitting by layer lets
- * the layer view draw a subset without rebuilding anything.
+ * <p>Geometry is stored relative to the build's anchor, so moving a build does not rebuild anything by
+ * itself. Blocks that are already placed correctly are left out. When blocks are placed or removed, only
+ * the affected layers are rebuilt. Splitting by layer also lets the layer view draw a subset as is.
  *
  * <p>All methods must be called on the render thread.
  */
@@ -53,63 +56,133 @@ final class GhostMesh {
      */
     private static BufferBuilder scratch;
 
+    /** Entry is not drawn and does not hide neighbouring faces. */
+    static final byte KIND_ABSENT = 0;
+    /** Entry is drawn as a ghost block. */
+    static final byte KIND_GHOST = 1;
+    /** The real block is already in place: not drawn, but it hides the faces of ghosts next to it. */
+    static final byte KIND_PLACED = 2;
+
     private VertexBuffer[] layers = new VertexBuffer[0];
+    private byte[] builtKinds = new byte[0];
     private boolean outline;
 
-    /** Replaces the geometry with the current state of the projection. */
-    void rebuild(SchematicProjection projection, boolean outline, ClientLevel level) {
-        close();
+    /**
+     * Brings the geometry up to date and rebuilds only the layers whose content changed.
+     *
+     * @param validation what is known about the world, or null to draw every block as a ghost
+     * @param rebuildAll true when the build's shape or the style changed and nothing can be reused
+     */
+    void sync(SchematicProjection projection, @Nullable ValidationState validation, boolean outline,
+              ClientLevel level, boolean rebuildAll) {
+        int layerCount = projection.layerCount();
+        byte[] kinds = kindsOf(projection, validation);
+        if (rebuildAll || layers.length != layerCount || builtKinds.length != kinds.length || this.outline != outline) {
+            close();
+            layers = new VertexBuffer[layerCount];
+            rebuildAll = true;
+        }
         this.outline = outline;
-        this.layers = new VertexBuffer[projection.layerCount()];
+
+        // A layer has to be rebuilt when one of its own entries changed, or one directly above or below,
+        // because hidden faces depend on the neighbours.
+        boolean[] changed = new boolean[layerCount];
+        if (!rebuildAll) {
+            for (int y = 0; y < layerCount; y++) {
+                for (int i = projection.layerStart(y); i < projection.layerEnd(y); i++) {
+                    if (kinds[i] != builtKinds[i]) {
+                        changed[y] = true;
+                        break;
+                    }
+                }
+            }
+        }
+        builtKinds = kinds;
+
+        GhostBlockView view = null;
+        for (int y = 0; y < layerCount; y++) {
+            boolean rebuild = rebuildAll || changed[y] || (y > 0 && changed[y - 1])
+                    || (y + 1 < layerCount && changed[y + 1]);
+            if (!rebuild) {
+                continue;
+            }
+            if (view == null) {
+                view = new GhostBlockView(projection, kinds, level);
+            }
+            rebuildLayer(projection, kinds, view, y);
+        }
+    }
+
+    private static byte[] kindsOf(SchematicProjection projection, @Nullable ValidationState validation) {
+        byte[] kinds = new byte[projection.size()];
+        for (int i = 0; i < kinds.length; i++) {
+            if (projection.stateAt(i).isAir()) {
+                // Clearance entries mark free space; there is nothing to draw.
+                kinds[i] = KIND_ABSENT;
+            } else if (validation == null) {
+                kinds[i] = KIND_GHOST;
+            } else {
+                kinds[i] = switch (validation.statusAt(i)) {
+                    case ValidationState.CORRECT -> KIND_PLACED;
+                    // A wrong block is marked by a highlight instead; its real shape is unknown here,
+                    // so it must not hide any ghost faces.
+                    case ValidationState.WRONG -> KIND_ABSENT;
+                    default -> KIND_GHOST;
+                };
+            }
+        }
+        return kinds;
+    }
+
+    private void rebuildLayer(SchematicProjection projection, byte[] kinds, GhostBlockView view, int y) {
+        if (layers[y] != null) {
+            layers[y].close();
+            layers[y] = null;
+        }
         if (scratch == null) {
             scratch = new BufferBuilder(1 << 20);
         }
-
         Minecraft minecraft = Minecraft.getInstance();
         BlockRenderDispatcher dispatcher = minecraft.getBlockRenderer();
-        GhostBlockView view = new GhostBlockView(projection, level);
         BlockPos anchor = projection.placement().anchor();
         RandomSource random = RandomSource.create();
         PoseStack poseStack = new PoseStack();
         BlockPos.MutableBlockPos relative = new BlockPos.MutableBlockPos();
 
         try {
-            for (int y = 0; y < layers.length; y++) {
-                if (outline) {
-                    scratch.begin(VertexFormat.Mode.LINES, DefaultVertexFormat.POSITION_COLOR_NORMAL);
-                } else {
-                    scratch.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.BLOCK);
+            if (outline) {
+                scratch.begin(VertexFormat.Mode.LINES, DefaultVertexFormat.POSITION_COLOR_NORMAL);
+            } else {
+                scratch.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.BLOCK);
+            }
+            for (int i = projection.layerStart(y); i < projection.layerEnd(y); i++) {
+                if (kinds[i] != KIND_GHOST) {
+                    continue;
                 }
-                for (int i = projection.layerStart(y); i < projection.layerEnd(y); i++) {
-                    BlockState state = projection.stateAt(i);
-                    if (state.isAir()) {
-                        // Clearance entries mark free space; there is nothing to draw.
-                        continue;
+                BlockState state = projection.stateAt(i);
+                long packed = projection.positionAt(i);
+                relative.set(BlockPos.getX(packed) - anchor.getX(), BlockPos.getY(packed) - anchor.getY(),
+                        BlockPos.getZ(packed) - anchor.getZ());
+                poseStack.pushPose();
+                poseStack.translate(relative.getX(), relative.getY(), relative.getZ());
+                try {
+                    if (outline) {
+                        addOutline(state, view, relative, poseStack);
+                    } else {
+                        addBlock(state, view, relative, poseStack, dispatcher, random, minecraft);
                     }
-                    long packed = projection.positionAt(i);
-                    relative.set(BlockPos.getX(packed) - anchor.getX(), BlockPos.getY(packed) - anchor.getY(),
-                            BlockPos.getZ(packed) - anchor.getZ());
-                    poseStack.pushPose();
-                    poseStack.translate(relative.getX(), relative.getY(), relative.getZ());
-                    try {
-                        if (outline) {
-                            addOutline(state, view, relative, poseStack);
-                        } else {
-                            addBlock(state, view, relative, poseStack, dispatcher, random, minecraft);
-                        }
-                    } catch (RuntimeException e) {
-                        // A broken model from another mod must not take the whole build down with it.
-                        BuildingAssistant.LOGGER.warn("Could not build ghost geometry for {}", state, e);
-                    }
-                    poseStack.popPose();
+                } catch (RuntimeException e) {
+                    // A broken model from another mod must not take the whole build down with it.
+                    BuildingAssistant.LOGGER.warn("Could not build ghost geometry for {}", state, e);
                 }
-                BufferBuilder.RenderedBuffer rendered = scratch.endOrDiscardIfEmpty();
-                if (rendered != null) {
-                    VertexBuffer buffer = new VertexBuffer(VertexBuffer.Usage.STATIC);
-                    buffer.bind();
-                    buffer.upload(rendered);
-                    layers[y] = buffer;
-                }
+                poseStack.popPose();
+            }
+            BufferBuilder.RenderedBuffer rendered = scratch.endOrDiscardIfEmpty();
+            if (rendered != null) {
+                VertexBuffer buffer = new VertexBuffer(VertexBuffer.Usage.STATIC);
+                buffer.bind();
+                buffer.upload(rendered);
+                layers[y] = buffer;
             }
         } finally {
             if (scratch.building()) {
@@ -277,5 +350,6 @@ final class GhostMesh {
             }
         }
         layers = new VertexBuffer[0];
+        builtKinds = new byte[0];
     }
 }

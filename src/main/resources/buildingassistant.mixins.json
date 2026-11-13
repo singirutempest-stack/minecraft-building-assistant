@@ -5,6 +5,7 @@
   "compatibilityLevel": "JAVA_17",
   "refmap": "buildingassistant.refmap.json",
   "client": [
+    "ClientLevelMixin",
     "GameRendererMixin"
   ],
   "injectors": {

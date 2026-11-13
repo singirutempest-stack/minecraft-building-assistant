@@ -5,6 +5,7 @@ import com.buildingassistant.config.ClientConfig;
 import com.buildingassistant.config.GhostStyle;
 import com.buildingassistant.library.SchematicLibrary;
 import com.buildingassistant.schematic.Schematic;
+import com.buildingassistant.validation.ValidationMode;
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.DoubleArgumentType;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
@@ -59,6 +60,16 @@ public final class BuildingAssistantCommand {
                 .then(Commands.argument("percent", IntegerArgumentType.integer(15, 100))
                         .executes(BuildingAssistantCommand::opacity)));
 
+        root.then(Commands.literal("next").executes(context -> run(ProjectActions::nextError)));
+        root.then(Commands.literal("status").executes(BuildingAssistantCommand::status));
+
+        LiteralArgumentBuilder<CommandSourceStack> mode = Commands.literal("mode");
+        for (ValidationMode value : ValidationMode.values()) {
+            mode.then(Commands.literal(value.name().toLowerCase(Locale.ROOT))
+                    .executes(context -> run(() -> ProjectActions.setValidationMode(value))));
+        }
+        root.then(mode);
+
         LiteralArgumentBuilder<CommandSourceStack> style = Commands.literal("style");
         for (GhostStyle value : GhostStyle.values()) {
             style.then(Commands.literal(value.name().toLowerCase(Locale.ROOT)).executes(context -> setStyle(context, value)));
@@ -96,6 +107,16 @@ public final class BuildingAssistantCommand {
             return 0;
         }
         ProjectActions.start(schematic.get());
+        return 1;
+    }
+
+    private static int status(CommandContext<CommandSourceStack> context) {
+        Component summary = ProjectActions.statusSummary();
+        if (summary == null) {
+            context.getSource().sendFailure(Component.translatable("buildingassistant.message.no_project"));
+            return 0;
+        }
+        context.getSource().sendSuccess(() -> summary, false);
         return 1;
     }
 

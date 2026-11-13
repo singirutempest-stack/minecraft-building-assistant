@@ -1,20 +1,25 @@
 package com.buildingassistant.client;
 
+import com.buildingassistant.config.ClientConfig;
 import com.buildingassistant.project.BuildProject;
 import com.buildingassistant.project.ProjectManager;
 import com.buildingassistant.schematic.Schematic;
 import com.buildingassistant.transform.GridTransform;
 import com.buildingassistant.transform.Placement;
+import com.buildingassistant.validation.ValidationMode;
+import com.buildingassistant.validation.ValidationState;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.client.resources.language.I18n;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.network.chat.Component;
+import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
 
 import javax.annotation.Nullable;
+import java.util.Locale;
 
 /**
  * What the player can do with the current project. Hotkeys, commands and screens all go through these
@@ -114,6 +119,57 @@ public final class ProjectActions {
         notify(Component.translatable(visible
                 ? "buildingassistant.message.ghosts_shown"
                 : "buildingassistant.message.ghosts_hidden"));
+    }
+
+    /** Points the player at the next wrong block: outlines it through walls and names what belongs there. */
+    public static void nextError() {
+        BuildProject project = requireProject();
+        if (project == null) {
+            return;
+        }
+        ValidationState validation = project.validation();
+        if (validation == null) {
+            notify(Component.translatable("buildingassistant.message.not_checked_yet"));
+            return;
+        }
+        int index = validation.nextError(project.selectedError());
+        project.setSelectedError(index);
+        if (index < 0) {
+            notify(Component.translatable("buildingassistant.message.no_errors"));
+            return;
+        }
+        BlockPos pos = BlockPos.of(validation.projection().positionAt(index));
+        BlockState expected = validation.projection().stateAt(index);
+        if (expected.isAir()) {
+            notify(Component.translatable("buildingassistant.message.error_obstructed",
+                    pos.getX(), pos.getY(), pos.getZ()));
+        } else {
+            notify(Component.translatable("buildingassistant.message.error_wrong",
+                    pos.getX(), pos.getY(), pos.getZ(), expected.getBlock().getName()));
+        }
+    }
+
+    /** Switches between strict and flexible checking and re-checks every build. */
+    public static void setValidationMode(ValidationMode mode) {
+        ClientConfig.VALIDATION_MODE.set(mode);
+        ClientConfig.VALIDATION_MODE.save();
+        ClientValidation.invalidate();
+        notify(Component.translatable("buildingassistant.message.mode",
+                Component.translatable("buildingassistant.validation_mode." + mode.name().toLowerCase(Locale.ROOT))));
+    }
+
+    /** One-line summary of the current build's state, or null when there is nothing to report. */
+    @Nullable
+    public static Component statusSummary() {
+        BuildProject project = ProjectManager.get().current();
+        ValidationState validation = project == null ? null : project.validation();
+        if (validation == null) {
+            return null;
+        }
+        return Component.translatable("buildingassistant.message.status",
+                displayName(project.schematic()), Math.round(validation.progress() * 100.0F),
+                validation.correct(), validation.required(), validation.missing(),
+                validation.wrong(), validation.obstructed());
     }
 
     /** Schematic name in the player's language when a translation exists, otherwise the stored name. */
