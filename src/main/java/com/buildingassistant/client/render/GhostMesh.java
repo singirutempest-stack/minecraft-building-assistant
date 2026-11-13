@@ -1,0 +1,271 @@
+package com.buildingassistant.client.render;
+
+import com.buildingassistant.BuildingAssistant;
+import com.buildingassistant.transform.SchematicProjection;
+import com.mojang.blaze3d.systems.RenderSystem;
+import com.mojang.blaze3d.vertex.BufferBuilder;
+import com.mojang.blaze3d.vertex.DefaultVertexFormat;
+import com.mojang.blaze3d.vertex.PoseStack;
+import com.mojang.blaze3d.vertex.VertexBuffer;
+import com.mojang.blaze3d.vertex.VertexFormat;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.client.renderer.LevelRenderer;
+import net.minecraft.client.renderer.LightTexture;
+import net.minecraft.client.renderer.RenderType;
+import net.minecraft.client.renderer.ShaderInstance;
+import net.minecraft.client.renderer.block.BlockRenderDispatcher;
+import net.minecraft.client.renderer.texture.OverlayTexture;
+import net.minecraft.client.renderer.texture.TextureAtlasSprite;
+import net.minecraft.client.resources.model.BakedModel;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
+import net.minecraft.util.RandomSource;
+import net.minecraft.world.inventory.InventoryMenu;
+import net.minecraft.world.level.block.LiquidBlock;
+import net.minecraft.world.level.block.RenderShape;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.material.FluidState;
+import net.minecraft.world.phys.shapes.Shapes;
+import net.minecraft.world.phys.shapes.VoxelShape;
+import net.minecraftforge.client.extensions.common.IClientFluidTypeExtensions;
+import net.minecraftforge.client.model.data.ModelData;
+import org.joml.Matrix3f;
+import org.joml.Matrix4f;
+
+/**
+ * GPU geometry of one build's ghost blocks, one vertex buffer per layer.
+ *
+ * <p>Geometry is stored relative to the build's anchor. Moving a build therefore costs nothing, and the
+ * buffers are rebuilt only when the build's shape or the display style changes. Splitting by layer lets
+ * the layer view draw a subset without rebuilding anything.
+ *
+ * <p>All methods must be called on the render thread.
+ */
+final class GhostMesh {
+
+    /** Fluids are drawn slightly lower than a full block, like a still water surface. */
+    private static final double FLUID_HEIGHT = 14.0 / 16.0;
+
+    /**
+     * Shared scratch buffer. It is only used inside {@link #rebuild}, which runs on the render thread,
+     * and sharing it avoids allocating native memory for every build.
+     */
+    private static BufferBuilder scratch;
+
+    private VertexBuffer[] layers = new VertexBuffer[0];
+    private boolean outline;
+
+    /** Replaces the geometry with the current state of the projection. */
+    void rebuild(SchematicProjection projection, boolean outline, ClientLevel level) {
+        close();
+        this.outline = outline;
+        this.layers = new VertexBuffer[projection.layerCount()];
+        if (scratch == null) {
+            scratch = new BufferBuilder(1 << 20);
+        }
+
+        Minecraft minecraft = Minecraft.getInstance();
+        BlockRenderDispatcher dispatcher = minecraft.getBlockRenderer();
+        GhostBlockView view = new GhostBlockView(projection, level);
+        BlockPos anchor = projection.placement().anchor();
+        RandomSource random = RandomSource.create();
+        PoseStack poseStack = new PoseStack();
+        BlockPos.MutableBlockPos relative = new BlockPos.MutableBlockPos();
+
+        try {
+            for (int y = 0; y < layers.length; y++) {
+                if (outline) {
+                    scratch.begin(VertexFormat.Mode.LINES, DefaultVertexFormat.POSITION_COLOR_NORMAL);
+                } else {
+                    scratch.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.BLOCK);
+                }
+                for (int i = projection.layerStart(y); i < projection.layerEnd(y); i++) {
+                    BlockState state = projection.stateAt(i);
+                    if (state.isAir()) {
+                        // Clearance entries mark free space; there is nothing to draw.
+                        continue;
+                    }
+                    long packed = projection.positionAt(i);
+                    relative.set(BlockPos.getX(packed) - anchor.getX(), BlockPos.getY(packed) - anchor.getY(),
+                            BlockPos.getZ(packed) - anchor.getZ());
+                    poseStack.pushPose();
+                    poseStack.translate(relative.getX(), relative.getY(), relative.getZ());
+                    try {
+                        if (outline) {
+                            addOutline(state, view, relative, poseStack);
+                        } else {
+                            addBlock(state, view, relative, poseStack, dispatcher, random, minecraft);
+                        }
+                    } catch (RuntimeException e) {
+                        // A broken model from another mod must not take the whole build down with it.
+                        BuildingAssistant.LOGGER.warn("Could not build ghost geometry for {}", state, e);
+                    }
+                    poseStack.popPose();
+                }
+                BufferBuilder.RenderedBuffer rendered = scratch.endOrDiscardIfEmpty();
+                if (rendered != null) {
+                    VertexBuffer buffer = new VertexBuffer(VertexBuffer.Usage.STATIC);
+                    buffer.bind();
+                    buffer.upload(rendered);
+                    layers[y] = buffer;
+                }
+            }
+        } finally {
+            if (scratch.building()) {
+                scratch.endOrDiscardIfEmpty();
+            }
+            VertexBuffer.unbind();
+        }
+    }
+
+    private static void addBlock(BlockState state, GhostBlockView view, BlockPos relative, PoseStack poseStack,
+                                 BlockRenderDispatcher dispatcher, RandomSource random, Minecraft minecraft) {
+        if (state.getBlock() instanceof LiquidBlock) {
+            FluidState fluid = state.getFluidState();
+            IClientFluidTypeExtensions extensions = IClientFluidTypeExtensions.of(fluid);
+            TextureAtlasSprite sprite = minecraft.getTextureAtlas(InventoryMenu.BLOCK_ATLAS)
+                    .apply(extensions.getStillTexture());
+            addBox(poseStack, view, sprite, extensions.getTintColor(), 0, 0, 0, 1, FLUID_HEIGHT, 1);
+            return;
+        }
+
+        BakedModel model = dispatcher.getBlockModel(state);
+        if (state.getRenderShape() == RenderShape.MODEL) {
+            long seed = state.getSeed(relative);
+            for (RenderType renderType : model.getRenderTypes(state, RandomSource.create(seed), ModelData.EMPTY)) {
+                dispatcher.getModelRenderer().tesselateBlock(view, model, state, relative, poseStack, scratch,
+                        true, random, seed, OverlayTexture.NO_OVERLAY, ModelData.EMPTY, renderType);
+            }
+            return;
+        }
+
+        // Chests, beds, signs and similar blocks are drawn by block entity renderers and have no block
+        // model. Show their outline shape, textured with the block's particle texture, so the player
+        // still sees where the block goes and how large it is.
+        TextureAtlasSprite sprite = model.getParticleIcon(ModelData.EMPTY);
+        VoxelShape shape = state.getShape(view, relative);
+        if (shape.isEmpty()) {
+            shape = Shapes.block();
+        }
+        shape.forAllBoxes((minX, minY, minZ, maxX, maxY, maxZ) ->
+                addBox(poseStack, view, sprite, 0xFFFFFF, minX, minY, minZ, maxX, maxY, maxZ));
+    }
+
+    private static void addOutline(BlockState state, GhostBlockView view, BlockPos relative, PoseStack poseStack) {
+        VoxelShape shape = state.getShape(view, relative);
+        if (shape.isEmpty()) {
+            shape = Shapes.block();
+        }
+        // White lines; the configured colour and opacity are applied when drawing.
+        shape.forAllBoxes((minX, minY, minZ, maxX, maxY, maxZ) ->
+                LevelRenderer.renderLineBox(poseStack, scratch, minX, minY, minZ, maxX, maxY, maxZ, 1, 1, 1, 1));
+    }
+
+    /** Adds a textured box in block vertex format. Faces are wound counter-clockwise seen from outside. */
+    private static void addBox(PoseStack poseStack, GhostBlockView view, TextureAtlasSprite sprite, int rgb,
+                               double minX, double minY, double minZ, double maxX, double maxY, double maxZ) {
+        float x1 = (float) minX;
+        float y1 = (float) minY;
+        float z1 = (float) minZ;
+        float x2 = (float) maxX;
+        float y2 = (float) maxY;
+        float z2 = (float) maxZ;
+        Matrix4f pose = poseStack.last().pose();
+        Matrix3f normal = poseStack.last().normal();
+
+        quad(pose, normal, view, sprite, rgb, Direction.DOWN, x1, y1, z1, x2, y1, z1, x2, y1, z2, x1, y1, z2);
+        quad(pose, normal, view, sprite, rgb, Direction.UP, x1, y2, z1, x1, y2, z2, x2, y2, z2, x2, y2, z1);
+        quad(pose, normal, view, sprite, rgb, Direction.NORTH, x1, y1, z1, x1, y2, z1, x2, y2, z1, x2, y1, z1);
+        quad(pose, normal, view, sprite, rgb, Direction.SOUTH, x1, y1, z2, x2, y1, z2, x2, y2, z2, x1, y2, z2);
+        quad(pose, normal, view, sprite, rgb, Direction.WEST, x1, y1, z1, x1, y1, z2, x1, y2, z2, x1, y2, z1);
+        quad(pose, normal, view, sprite, rgb, Direction.EAST, x2, y1, z1, x2, y2, z1, x2, y2, z2, x2, y1, z2);
+    }
+
+    private static void quad(Matrix4f pose, Matrix3f normal, GhostBlockView view, TextureAtlasSprite sprite, int rgb,
+                             Direction face,
+                             float ax, float ay, float az, float bx, float by, float bz,
+                             float cx, float cy, float cz, float dx, float dy, float dz) {
+        // Same directional shading the game applies to block faces.
+        float shade = view.getShade(face, true);
+        float red = ((rgb >> 16) & 0xFF) / 255.0F * shade;
+        float green = ((rgb >> 8) & 0xFF) / 255.0F * shade;
+        float blue = (rgb & 0xFF) / 255.0F * shade;
+        vertex(pose, normal, face, ax, ay, az, red, green, blue, sprite.getU0(), sprite.getV1());
+        vertex(pose, normal, face, bx, by, bz, red, green, blue, sprite.getU1(), sprite.getV1());
+        vertex(pose, normal, face, cx, cy, cz, red, green, blue, sprite.getU1(), sprite.getV0());
+        vertex(pose, normal, face, dx, dy, dz, red, green, blue, sprite.getU0(), sprite.getV0());
+    }
+
+    private static void vertex(Matrix4f pose, Matrix3f normal, Direction face, float x, float y, float z,
+                               float red, float green, float blue, float u, float v) {
+        // Element order of DefaultVertexFormat.BLOCK: position, colour, texture, light, normal.
+        scratch.vertex(pose, x, y, z)
+                .color(red, green, blue, 1.0F)
+                .uv(u, v)
+                .uv2(LightTexture.FULL_BRIGHT)
+                .normal(normal, face.getStepX(), face.getStepY(), face.getStepZ())
+                .endVertex();
+    }
+
+    /**
+     * Draws layers {@code firstLayer} to {@code lastLayer} (inclusive).
+     *
+     * @param modelView model-view matrix already translated to the build's anchor
+     */
+    void draw(Matrix4f modelView, Matrix4f projection, int firstLayer, int lastLayer,
+              float red, float green, float blue, float alpha) {
+        int first = Math.max(0, firstLayer);
+        int last = Math.min(layers.length - 1, lastLayer);
+        if (first > last) {
+            return;
+        }
+
+        RenderType renderType = outline ? RenderType.lines() : RenderType.translucent();
+        renderType.setupRenderState();
+        RenderSystem.setShaderColor(red, green, blue, alpha);
+        ShaderInstance shader = RenderSystem.getShader();
+        try {
+            if (shader == null) {
+                return;
+            }
+            if (!outline) {
+                // Depth-only pass first. Afterwards only the nearest ghost surface passes the depth test,
+                // so overlapping translucent faces do not pile up into a muddy, order-dependent picture.
+                RenderSystem.colorMask(false, false, false, false);
+                drawLayers(modelView, projection, shader, first, last);
+                RenderSystem.colorMask(true, true, true, true);
+            }
+            drawLayers(modelView, projection, shader, first, last);
+        } finally {
+            VertexBuffer.unbind();
+            RenderSystem.colorMask(true, true, true, true);
+            RenderSystem.setShaderColor(1.0F, 1.0F, 1.0F, 1.0F);
+            renderType.clearRenderState();
+        }
+    }
+
+    private void drawLayers(Matrix4f modelView, Matrix4f projection, ShaderInstance shader, int first, int last) {
+        for (int y = first; y <= last; y++) {
+            VertexBuffer buffer = layers[y];
+            if (buffer != null) {
+                buffer.bind();
+                buffer.drawWithShader(modelView, projection, shader);
+            }
+        }
+    }
+
+    int layerCount() {
+        return layers.length;
+    }
+
+    /** Frees the GPU buffers. The mesh can be rebuilt afterwards. */
+    void close() {
+        for (VertexBuffer buffer : layers) {
+            if (buffer != null) {
+                buffer.close();
+            }
+        }
+        layers = new VertexBuffer[0];
+    }
+}

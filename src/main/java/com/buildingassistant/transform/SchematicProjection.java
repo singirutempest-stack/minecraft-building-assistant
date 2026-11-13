@@ -27,6 +27,8 @@ public final class SchematicProjection {
     private final BlockState[] states;
     private final byte[] stages;
     private final byte[] layers;
+    /** Entries are ordered by layer; layer y occupies indices layerStarts[y] to layerStarts[y + 1] - 1. */
+    private final int[] layerStarts;
     private final Long2IntOpenHashMap indexByPosition;
     private final BoundingBox bounds;
     private final List<String> warnings;
@@ -46,6 +48,16 @@ public final class SchematicProjection {
         for (int i = 0; i < positions.length; i++) {
             indexByPosition.put(positions[i], i);
         }
+
+        this.layerStarts = new int[schematic.sizeY() + 1];
+        int entry = 0;
+        for (int y = 0; y < schematic.sizeY(); y++) {
+            layerStarts[y] = entry;
+            while (entry < layers.length && layers[entry] == y) {
+                entry++;
+            }
+        }
+        layerStarts[schematic.sizeY()] = entry;
     }
 
     public static SchematicProjection create(Schematic schematic, Placement placement) {
@@ -121,6 +133,20 @@ public final class SchematicProjection {
     /** Height of an entry above the bottom of the schematic. */
     public int layerAt(int index) {
         return layers[index];
+    }
+
+    public int layerCount() {
+        return layerStarts.length - 1;
+    }
+
+    /** Index of the first entry in a layer. */
+    public int layerStart(int y) {
+        return layerStarts[y];
+    }
+
+    /** Index one past the last entry in a layer. */
+    public int layerEnd(int y) {
+        return layerStarts[y + 1];
     }
 
     /** Entry index at a world position, or -1 when the position is not part of the build. */

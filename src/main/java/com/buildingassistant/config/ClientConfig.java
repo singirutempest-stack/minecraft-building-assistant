@@ -41,8 +41,8 @@ public final class ClientConfig {
                 .comment("How missing blocks are drawn.")
                 .defineEnum("style", GhostStyle.TEXTURED);
         MISSING_COLOR = builder
-                .comment("Tint of blocks that still have to be placed, as RRGGBB.")
-                .define("missingColor", "FFFFFF", ClientConfig::isHexColor);
+                .comment("Colour of blocks that still have to be placed, as RRGGBB. Used by the TINTED and OUTLINE styles.")
+                .define("missingColor", "8FD3FF", ClientConfig::isHexColor);
         WRONG_COLOR = builder
                 .comment("Highlight colour of wrongly placed blocks, as RRGGBB.")
                 .define("wrongColor", "E0352B", ClientConfig::isHexColor);
