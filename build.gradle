@@ -13,6 +13,15 @@ base {
 
 java.toolchain.languageVersion = JavaLanguageVersion.of(17)
 
+// GameTests run inside a real server and check everything that needs the block registry or a world.
+// They live in their own source set so that no test code ends up in the released JAR.
+sourceSets {
+    gametest {
+        compileClasspath += sourceSets.main.compileClasspath + sourceSets.main.output
+        runtimeClasspath += sourceSets.main.runtimeClasspath + sourceSets.main.output
+    }
+}
+
 minecraft {
     mappings channel: mapping_channel, version: mapping_version
 
@@ -33,6 +42,11 @@ minecraft {
 
         client {
             property 'forge.enabledGameTestNamespaces', mod_id
+            mods {
+                "${mod_id}" {
+                    source sourceSets.gametest
+                }
+            }
         }
 
         server {
@@ -44,6 +58,11 @@ minecraft {
         // Used by CI to check world-dependent logic without a client.
         gameTestServer {
             property 'forge.enabledGameTestNamespaces', mod_id
+            mods {
+                "${mod_id}" {
+                    source sourceSets.gametest
+                }
+            }
         }
     }
 }

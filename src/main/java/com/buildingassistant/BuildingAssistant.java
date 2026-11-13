@@ -1,8 +1,11 @@
 package com.buildingassistant;
 
+import com.buildingassistant.config.ClientConfig;
 import com.mojang.logging.LogUtils;
 import net.minecraftforge.eventbus.api.IEventBus;
+import net.minecraftforge.fml.ModLoadingContext;
 import net.minecraftforge.fml.common.Mod;
+import net.minecraftforge.fml.config.ModConfig;
 import net.minecraftforge.fml.event.lifecycle.FMLCommonSetupEvent;
 import net.minecraftforge.fml.javafmlmod.FMLJavaModLoadingContext;
 import org.slf4j.Logger;
@@ -20,6 +23,9 @@ public final class BuildingAssistant {
     public BuildingAssistant() {
         IEventBus modEventBus = FMLJavaModLoadingContext.get().getModEventBus();
         modEventBus.addListener(this::onCommonSetup);
+
+        // Client preferences only; a dedicated server never loads this file.
+        ModLoadingContext.get().registerConfig(ModConfig.Type.CLIENT, ClientConfig.SPEC);
     }
 
     private void onCommonSetup(FMLCommonSetupEvent event) {
